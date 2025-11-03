@@ -1,6 +1,6 @@
 # SDLE Second Assignment
 
-SDLE Second Assignment of group T&lt;m&gt;&lt;n&gt;G&lt;p&gt;&lt;q&gt;.
+SDLE Second Assignment of group T06G06.
 
 Group members:
 
