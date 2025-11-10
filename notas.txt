@@ -1,0 +1,3 @@
+timestamp = numero da operacao .... Tempo logico ou seja , primiero numero da operacao 1,2,3,4...(Type int)
+
+mesmo numero de proxys e servidores
