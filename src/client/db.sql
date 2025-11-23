@@ -1,10 +1,9 @@
-
 CREATE TABLE IF NOT EXISTS ShoppingList (
-    uuid TEXT PRIMARY KEY,
+    uuid UUID PRIMARY KEY,      
     name TEXT NOT NULL,
-    crdt JSONB NOT NULL         
+    crdt JSONB NOT NULL,
+    logical_clock INTEGER DEFAULT 0
 );
-
 
 CREATE TABLE IF NOT EXISTS ShoppingListItem (
     id SERIAL PRIMARY KEY,
