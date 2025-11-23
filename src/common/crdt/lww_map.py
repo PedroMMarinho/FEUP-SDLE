@@ -1,5 +1,4 @@
-from .lww_register import LWWRegister
-
+from src.common.crdt.lww_register import LWWRegister
 
 class LWWMap:
     
