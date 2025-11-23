@@ -97,10 +97,15 @@ class ShoppingListStorage:
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
+                    "SELECT name FROM ShoppingList WHERE uuid=%s", 
+                    (list_id,)
+                )
+                row = cursor.fetchone()
+                cursor.execute(
                     "SELECT name, quantityNeeded, quantityAcquired FROM ShoppingListItem WHERE shopping_list_uuid=%s", 
                     (list_id,)
                 )
-                return cursor.fetchall()
+                return (row[0], cursor.fetchall())
         except DataError:
             return None
         finally:

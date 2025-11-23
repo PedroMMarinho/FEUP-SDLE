@@ -15,7 +15,8 @@ class ClientInterface:
         print("3. [s]how <uuid>         -> Show items in a list")
         print("4. [a]dd <uuid> <item>   -> Add item to list")
         print("5. [d]el <uuid> <item>   -> Delete item from list")
-        print("6. [q]uit                -> Exit")
+        print("6. [u]pdate <uuid> <item> <qty_acquired> -> Update item quantity acquired")
+        print("7. [q]uit                -> Exit")
 
     def create_list(self, name):
         sl = ShopList() 
@@ -35,13 +36,13 @@ class ClientInterface:
 
     def show_list_content(self, list_id):
         """Displays the items inside a specific list using the SQL Read-Cache."""
-        rows = self.storage.get_list_items_for_display(list_id)
+        name, rows = self.storage.get_list_items_for_display(list_id)
         
         if rows is None:
             print("Error: List not found.")
             return
 
-        print(f"\n--- CONTENT OF {list_id} ---")
+        print(f"\n--- CONTENT OF {name} {list_id} ---")
         if not rows:
             print("[Empty]")
             return
@@ -52,7 +53,7 @@ class ClientInterface:
             acquired = r[2]
             
             status = "[x]" if acquired >= needed else "[ ]"
-            print(f" {status} {name} (Qty: {needed})")
+            print(f" {status} {name} (Need: {needed}) | (Got: {acquired})")
 
     def add_item(self, list_id, item_name):
         sl = self.storage.get_list_by_id(list_id)
@@ -66,6 +67,20 @@ class ClientInterface:
         print(f"Added '{item_name}' to list.")
         
         self.communicator.send_update(sl.id, sl.to_json())
+
+    def update_item(self, list_id, item_name, **fields):
+        sl = self.storage.get_list_by_id(list_id)
+        if not sl:
+            print("Error: List not found.")
+            return
+
+        sl.update_item(key=item_name.lower(), **fields)
+
+        self.storage.save_list(sl)
+        print(f"Updated '{item_name}' with {fields}.")
+
+        self.communicator.send_update(sl.id, sl.to_json())
+
 
     def delete_item(self, list_id, item_name):
         sl = self.storage.get_list_by_id(list_id)
@@ -115,6 +130,8 @@ class ClientInterface:
 
                     case 'd' if len(args) >= 2:
                         self.delete_item(list_id=args[0], item_name=args[1])
+                    case 'u' if len(args) >= 3:
+                        self.update_item(list_id=args[0], item_name=args[1], qty_acquired=int(args[2]))
 
                     case _:
                         print("Invalid command or missing arguments. Type 'help' for usage.")
