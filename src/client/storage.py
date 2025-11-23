@@ -1,6 +1,6 @@
 import psycopg2
 import psycopg2.extras
-from psycopg2 import DataError # <--- Import this specific error
+from psycopg2 import DataError 
 from src.common.crdt.shop_list import ShopList
 import json
 
@@ -101,6 +101,8 @@ class ShoppingListStorage:
                     (list_id,)
                 )
                 row = cursor.fetchone()
+                if not row:
+                    return (None, None)
                 cursor.execute(
                     "SELECT name, quantityNeeded, quantityAcquired FROM ShoppingListItem WHERE shopping_list_uuid=%s", 
                     (list_id,)

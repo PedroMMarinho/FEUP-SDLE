@@ -15,7 +15,7 @@ class ClientInterface:
         print("3. [s]how <uuid>         -> Show items in a list")
         print("4. [a]dd <uuid> <item>   -> Add item to list")
         print("5. [d]el <uuid> <item>   -> Delete item from list")
-        print("6. [u]pdate <uuid> <item> <qty_acquired> -> Update item quantity acquired")
+        print("6. [u]pdate <uuid> <item> <qty_needed> [qty_acquired] -> Update item quantities")
         print("7. [q]uit                -> Exit")
 
     def create_list(self, name):
@@ -55,17 +55,43 @@ class ClientInterface:
             status = "[x]" if acquired >= needed else "[ ]"
             print(f" {status} {name} (Need: {needed}) | (Got: {acquired})")
 
-    def add_item(self, list_id, item_name):
+    def add_item(self, list_id, item_name, quantity=1):
+        """Adds an item with a specific target quantity."""
         sl = self.storage.get_list_by_id(list_id)
         if not sl:
             print("Error: List not found.")
             return
         
-        sl.add_item(key=item_name.lower(), name=item_name)
+        try:
+            qty_needed = int(quantity)
+        except ValueError:
+            qty_needed = 1
+
+        sl.add_item(key=item_name.lower(), name=item_name, qty_needed=qty_needed)
         
         self.storage.save_list(sl)
-        print(f"Added '{item_name}' to list.")
-        
+        print(f"Added '{item_name}' (Need: {qty_needed})")
+        self.communicator.send_update(sl.id, sl.to_json())
+
+
+    def update_item(self, list_id, item_name, needed, acquired):
+        """Updates the quantities of an existing item."""
+        sl = self.storage.get_list_by_id(list_id)
+        if not sl:
+            print("Error: List not found.")
+            return
+
+        try:
+            qty_n = int(needed)
+            qty_a = int(acquired)
+        except ValueError:
+            print("Error: Quantities must be numbers.")
+            return
+
+        sl.update_item(key=item_name.lower(), qty_needed=qty_n, qty_acquired=qty_a)
+
+        self.storage.save_list(sl)
+        print(f"Updated '{item_name}' -> Need: {qty_n}, Got: {qty_a}")
         self.communicator.send_update(sl.id, sl.to_json())
 
     def update_item(self, list_id, item_name, **fields):
@@ -106,38 +132,33 @@ class ClientInterface:
                 if not user_input: continue
                 
                 cmd = user_input[0].lower()
-                args = user_input[1:] 
+                args = user_input[1:]
 
                 match cmd:
                     case 'q':
-                        print("Exiting...")
                         break
-                    
                     case 'help':
                         self.print_help()
-
-                    case 'c' if len(args) >= 1:
-                        self.create_list(args[0])
-
                     case 'l':
                         self.show_lists()
-
                     case 's' if len(args) >= 1:
                         self.show_list_content(args[0])
-
-                    case 'a' if len(args) >= 2:
-                        self.add_item(list_id=args[0], item_name=args[1])
-
+                    case 'c' if len(args) >= 1:
+                        self.create_list(args[0])
                     case 'd' if len(args) >= 2:
                         self.delete_item(list_id=args[0], item_name=args[1])
                     case 'u' if len(args) >= 3:
-                        self.update_item(list_id=args[0], item_name=args[1], qty_acquired=int(args[2]))
-
+                        self.update_item(list_id=args[0], item_name=args[1], qty_needed=int(args[2]))
+                    case 'u' if len(args) >= 4:
+                        self.update_item(list_id=args[0], item_name=args[1], qty_needed=int(args[2]), qty_acquired=int(args[3]))
+                    case 'a' if len(args) == 2:
+                        self.add_item(args[0], args[1], quantity=1)
+                    case 'a' if len(args) >= 3:
+                        self.add_item(args[0], args[1], quantity=args[2])
                     case _:
-                        print("Invalid command or missing arguments. Type 'help' for usage.")
+                        print("Invalid command.")
 
             except KeyboardInterrupt:
-                print("\nStopping...")
                 break
             except Exception as e:
-                print(f"Unexpected Error: {e}")
+                print(f"Error: {e}")
