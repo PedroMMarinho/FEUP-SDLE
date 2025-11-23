@@ -38,5 +38,16 @@ class LWWMap:
     def keys(self):
         return [key for key, register in self.state.items() if register.value is not None]
 
+    def to_dict(self):
+        """Converts the entire map to a dictionary of dictionaries."""
+        return {k: v.to_dict() for k, v in self.state.items()}
+
+    @staticmethod
+    def from_dict(d):
+        """Recreates the map from a dictionary."""
+        m = LWWMap()
+        m.state = {k: LWWRegister.from_dict(v) for k, v in d.items()}
+        return m
+
     def __repr__(self):
         return f"LWWMap({self.state})"
