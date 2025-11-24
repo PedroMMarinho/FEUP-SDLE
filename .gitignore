@@ -1,0 +1,8 @@
+src/client/__pycache__/
+src/common/__pycache__/
+src/server/__pycache__/
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+client_*.db
