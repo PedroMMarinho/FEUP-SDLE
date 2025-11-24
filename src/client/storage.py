@@ -1,7 +1,7 @@
 import psycopg2
 import psycopg2.extras
 from psycopg2 import DataError 
-from src.common.crdt.shop_list import ShopList
+from src.common.crdt.lww.shop_list import ShopList
 from src.common.readWriteLock.read_write_lock import ReadWriteLock
 import json
 

@@ -1,5 +1,5 @@
 import sys
-from src.common.crdt.shop_list import ShopList
+from src.common.crdt.lww.shop_list import ShopList
 from src.client.storage import ShoppingListStorage
 
 class ClientInterface:

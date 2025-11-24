@@ -1,5 +1,5 @@
 import uuid
-from src.common.crdt.lww_map import LWWMap
+from src.common.crdt.lww.lww_map import LWWMap
 import json
 
 class ShopList:
