@@ -26,7 +26,6 @@ class ShopList:
         self.list.set(key, item, timestamp=ts)
 
     def update_item(self, key, **fields):
-        print(fields)
         if key not in self.list.state:
             self.add_item(key, name=fields.get("name", key))
 
