@@ -147,14 +147,14 @@ class ClientInterface:
                         self.create_list(args[0])
                     case 'd' if len(args) >= 2:
                         self.delete_item(list_id=args[0], item_name=args[1])
-                    case 'u' if len(args) >= 3:
-                        self.update_item(list_id=args[0], item_name=args[1], qty_needed=int(args[2]))
                     case 'u' if len(args) >= 4:
                         self.update_item(list_id=args[0], item_name=args[1], qty_needed=int(args[2]), qty_acquired=int(args[3]))
-                    case 'a' if len(args) == 2:
-                        self.add_item(args[0], args[1], quantity=1)
+                    case 'u' if len(args) >= 3:
+                        self.update_item(list_id=args[0], item_name=args[1], qty_needed=int(args[2]))
                     case 'a' if len(args) >= 3:
                         self.add_item(args[0], args[1], quantity=args[2])
+                    case 'a' if len(args) == 2:
+                        self.add_item(args[0], args[1], quantity=1)
                     case _:
                         print("Invalid command.")
 
