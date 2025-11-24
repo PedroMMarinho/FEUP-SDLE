@@ -1,5 +1,6 @@
-from src.common.crdt.pncounter.PNCounter import PNCounter
-from src.common.crdt.pncounter.ORSet import ORSet
+from src.common.crdt.improved.PNCounter import PNCounter
+from src.common.crdt.improved.ORSet import ORSet
+import json
 
 class ShoppingList:
     def __init__(self, list_id):
@@ -14,7 +15,7 @@ class ShoppingList:
     def _get_tag(self):
         return f"{self.id}:{self.clock}"
 
-    def add_item(self, name, needed_amount=1):
+    def add_item(self, name, needed_amount=1, acquired_amount=0):
         self._tick()
         tag = self._get_tag()
 
@@ -25,6 +26,7 @@ class ShoppingList:
                 "existence": ORSet() 
             }
             self.items[name]["needed"].change(self.id, needed_amount)
+            self.items[name]["acquired"].change(self.id, acquired_amount)
 
         self.items[name]["existence"].add(name, tag)
 
@@ -69,3 +71,19 @@ class ShoppingList:
                 self.items[name]["needed"].merge(other_data["needed"])
                 self.items[name]["acquired"].merge(other_data["acquired"])
                 self.items[name]["existence"].merge(other_data["existence"])
+
+    def to_dict(self):
+        def recursive_serialize(obj):
+            if isinstance(obj, set):
+                return list(obj)
+            elif hasattr(obj, "__dict__"):
+                return {k: recursive_serialize(v) for k, v in obj.__dict__.items()}
+            elif isinstance(obj, dict):
+                return {k: recursive_serialize(v) for k, v in obj.items()}
+            else:
+                return obj
+        
+        return recursive_serialize(self)
+
+    def to_json(self):
+        return json.dumps(self.to_dict())

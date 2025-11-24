@@ -1,4 +1,4 @@
-from src.common.crdt.pncounter.GCounter import GCounter
+from src.common.crdt.improved.GCounter import GCounter
 
 class PNCounter:
     def __init__(self):
