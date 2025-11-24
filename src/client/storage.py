@@ -2,6 +2,7 @@ import psycopg2
 import psycopg2.extras
 from psycopg2 import DataError 
 from src.common.crdt.shop_list import ShopList
+from src.common.readWriteLock.read_write_lock import ReadWriteLock
 import json
 
 class ShoppingListStorage:
@@ -12,6 +13,7 @@ class ShoppingListStorage:
             conn.close()
         except Exception as e:
             raise ConnectionError(f"Could not connect to Postgres: {e}")
+        self.lock = ReadWriteLock()
 
     def _get_conn(self):
         """Helper to get a fresh connection (Thread-Safe approach)."""
@@ -31,6 +33,7 @@ class ShoppingListStorage:
             conn.close()
 
     def save_list(self, shop_list, name=None):
+        self.lock.acquire_write()
         conn = self._get_conn()
         try:
             with conn.cursor() as cursor:
@@ -66,8 +69,10 @@ class ShoppingListStorage:
                     )
         finally:
             conn.close()
+            self.lock.release_write()
 
     def get_list_by_id(self, list_id):
+        self.lock.acquire_read()
         conn = self._get_conn()
         try:
             with conn.cursor() as cursor:
@@ -82,8 +87,10 @@ class ShoppingListStorage:
             return None
         finally:
             conn.close()
+            self.lock.release_read()
 
     def get_all_lists_metadata(self):
+        self.lock.acquire_read()
         conn = self._get_conn()
         try:
             with conn.cursor() as cursor:
@@ -91,8 +98,10 @@ class ShoppingListStorage:
                 return cursor.fetchall()
         finally:
             conn.close()
+            self.lock.release_read()
 
     def get_list_items_for_display(self, list_id):
+        self.lock.acquire_read()
         conn = self._get_conn()
         try:
             with conn.cursor() as cursor:
@@ -112,3 +121,4 @@ class ShoppingListStorage:
             return None
         finally:
             conn.close()
+            self.lock.release_read()
