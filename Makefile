@@ -88,5 +88,6 @@ help:
 	@echo "  make client2           - Run Client B"
 	@echo "  make servers           - Start Server_1 and Server_2 in background"
 	@echo "  make additional_server - Add a new server in background"
+	@echo "  make clean-logs        - Remove server log files"
 	@echo "  make stop-servers      - Stop all running servers"
 	@echo "  make clean             - Remove Python cache"
