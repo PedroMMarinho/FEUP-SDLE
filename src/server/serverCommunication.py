@@ -348,17 +348,34 @@ class ServerCommunicator:
     
     def handle_action_queue(self, server):
         print(f"[Network] Handling action queue for server {server.port}")
+
         while server.actionQueue:
-            action = server.actionQueue.pop(0)
-            match action[0]:
+            action_type, payload = server.actionQueue[0]   # FIFO
+
+            match action_type:
                 case ServerActions.NOTIFY:
-                    self.notify_server(server)
+                    result = self.notify_server(server)
+
                 case ServerActions.SEND_HINTED_HANDOFF:
-                    self.send_hinted_handoff(server)
+                    result = self.send_hinted_handoff(server, payload)
+
                 case ServerActions.REPLICA:
-                    self.send_replica(server, action[1])
+                    result = self.send_replica(server, payload)
+
+                case ServerActions.LOAD_BALANCE:
+                    result = self.load_balance_back(server)
+
                 case _:
-                    print(f"[Network] Unknown action in queue: {action}")
+                    print(f"[Network] Unknown action: {action_type}")
+                    result = True  # drop unknown actions
+
+            # If the action failed → stop processing for now
+            if not result:
+                break
+
+            # If success → remove from queue
+            server.actionQueue.pop(0)
+
 
     def handle_server_config_update(self, identity, payload):
         print(f"[Network] Handling SERVER_CONFIG_UPDATE from {identity}: {payload}")
@@ -651,4 +668,55 @@ class ServerCommunicator:
 
     def send_hinted_handoff(self, server, shop_list):
         print(f"[Network] Sending HINTED_HANDOFF to server {server.port} for list {shop_list['uuid']}")
-        pass
+
+        message = Message(
+            MessageType.SENT_FULL_LIST,
+            {"full_list": shop_list}
+        )
+
+        # Create / reuse socket
+        if server.socket is None:
+            s = self.context.socket(pyzmq.DEALER)
+            s.connect(f"tcp://localhost:{server.port}")
+            server.setSocket(s)
+        else:
+            s = server.socket
+
+        retries = 3
+        timeout = 1000  # ms
+
+        poller = pyzmq.Poller()
+        poller.register(s, pyzmq.POLLIN)
+
+        for attempt in range(1, retries + 1):
+            print(f"[Handoff] Sending SENT_FULL_LIST to {server.port} "
+                f"(attempt {attempt}/{retries})")
+
+            s.send(message.serialize())
+
+            socks = dict(poller.poll(timeout))
+
+            if s in socks and socks[s] == pyzmq.POLLIN:
+                reply_bytes = s.recv()
+                reply = Message(reply_bytes)
+
+                if reply.msg_type == MessageType.SENT_FULL_LIST_ACK:
+                    print(f"[Handoff] SENT_FULL_LIST_ACK received from {server.port}")
+                    return True
+
+                print(f"[Handoff] Unexpected reply: {reply.msg_type}")
+
+            else:
+                print(f"[Handoff] No ACK from {server.port}, retrying...")
+
+            timeout = min(timeout * 2, 8000)
+
+        # FAILED → queue it
+        print(f"[Handoff] FAILED to send hinted handoff to {server.port}, queueing action")
+        server.actionQueue.append((ServerActions.SEND_HINTED_HANDOFF, shop_list))
+        return False
+
+
+        
+
+

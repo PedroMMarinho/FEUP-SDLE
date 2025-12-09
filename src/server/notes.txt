@@ -4,3 +4,4 @@ Proxy Connection (not done, important)
 
 i think server_config_update might need to lock all other handlers to maintain consistency
 in list request read from main + replicas (instead of just any )
+the action queue needs to be stored in db together with all relevant info to perform each action so that its resilient against crashes
