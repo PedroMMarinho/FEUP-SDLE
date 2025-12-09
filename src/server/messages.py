@@ -6,9 +6,12 @@ class MessageType(Enum):
     REQUEST_FULL_LIST = 2
     FULL_LIST = 3
     HEARTBEAT = 4
-    SERVER_INTRODUCTION = 5
-    SERVER_INTRODUCTION_ACK = 6
-    HINTED_HANDOFF = 7
+    HEARTBEAT_ACK = 5
+    SERVER_INTRODUCTION = 6
+    SERVER_INTRODUCTION_ACK = 7
+    HINTED_HANDOFF = 8
+    SERVER_CONFIG_UPDATE = 9
+    SERVER_CONFIG_UPDATE_ACK = 10
 
 class Message:
     def __init__(self, msg_type, payload):

@@ -1,7 +1,10 @@
 import hashlib
-import threading
+from http import server
 import pyzmq
 from src.server.messages import Message, MessageType
+from src.common.threadPool.threadPool import ThreadPool
+from src.server.actions import ServerActions
+import time 
 
 
 class Server():
@@ -10,13 +13,13 @@ class Server():
         self.port = port
         self.socket = None
         self.unreachable = False
+        self.actionQueue = []
 
     def setSocket(self, socket):
         self.socket = socket
 
-class ServerCommunicator(threading.Thread):
+class ServerCommunicator:
     def __init__(self, db_config, port, seed, known_server_port):
-        threading.Thread.__init__(self)
         self.db_config = db_config
         self.port = port
         self.hash = hashlib.sha256(f"server_{port}".encode()).hexdigest()
@@ -28,17 +31,16 @@ class ServerCommunicator(threading.Thread):
         self.poller = pyzmq.Poller()
         self.server_interface_socket = None
         self.servers = []
+        self.thread_pool = ThreadPool(4)
+        self.disconnected = False
 
 
     def start(self):
         
-
+        self.setup_server_interface_socket()
         print(f"[System] Starting server on port {self.port}...")
         if self.seed:
             print("[System] Seeding as the first server.")
-            self.setup_server_interface_socket()
-            self.loop()
-
         else:
             print(f"[System] Connecting to known server on port {self.known_server_port}...")
 
@@ -48,9 +50,9 @@ class ServerCommunicator(threading.Thread):
             else:
                 print("[System] Failed to connect to known server. Exiting.")
                 return
-            self.setup_server_interface_socket()
             self.notify_other_servers()
-            self.loop()
+        self.thread_pool.submit(self.heartbeat)
+        self.loop()
 
     def setup_server_interface_socket(self):
         self.server_interface_socket = self.context.socket(pyzmq.ROUTER)
@@ -112,6 +114,10 @@ class ServerCommunicator(threading.Thread):
     def notify_other_servers(self):
         print("[Network] Notifying other servers...")
 
+        for server in self.servers:
+            self.notify_server(server)
+
+    def notify_server(self, server):
         notify_message = Message(
             MessageType.SERVER_INTRODUCTION,
             {"port": self.port, "hash": self.hash}
@@ -119,52 +125,48 @@ class ServerCommunicator(threading.Thread):
 
         retries = 3
         base_timeout = 1000  # 1 second
+        if server.port == self.port or server.port == self.known_server_port:
+            return
 
-        for server in self.servers:
-            if server.port == self.port or server.port == self.known_server_port:
-                continue  # skip myself or seed server (already connected)
+        # Create or reuse socket
+        if server.socket is None:
+            server_socket = self.context.socket(pyzmq.DEALER)
+            server_socket.connect(f"tcp://localhost:{server.port}")
+            server.setSocket(server_socket)
+        else:
+            server_socket = server.socket
 
-            # Create or reuse socket
-            if server.socket is None:
-                server_socket = self.context.socket(pyzmq.DEALER)
-                server_socket.connect(f"tcp://localhost:{server.port}")
-                server.setSocket(server_socket)
-            else:
-                server_socket = server.socket
+        poller = pyzmq.Poller()
+        poller.register(server_socket, pyzmq.POLLIN)
 
-            poller = pyzmq.Poller()
-            poller.register(server_socket, pyzmq.POLLIN)
+        timeout = base_timeout
 
-            timeout = base_timeout
+        for attempt in range(1, retries + 1):
+            print(f"[Notify] Sending intro to server {server.port} (attempt {attempt}/{retries})")
 
-            for attempt in range(1, retries + 1):
-                print(f"[Notify] Sending intro to server {server.port} (attempt {attempt}/{retries})")
+            server_socket.send(notify_message.serialize())
 
-                server_socket.send(notify_message.serialize())
+            socks = dict(poller.poll(timeout))
 
-                socks = dict(poller.poll(timeout))
+            if server_socket in socks and socks[server_socket] == pyzmq.POLLIN:
+                # SUCCESS
+                reply_bytes = server_socket.recv()
+                reply = Message(reply_bytes)
 
-                if server_socket in socks and socks[server_socket] == pyzmq.POLLIN:
-                    # SUCCESS
-                    reply_bytes = server_socket.recv()
-                    reply = Message(reply_bytes)
+                print(f"[Notify] Server {server.port} ACK: {reply.msg_type}")
 
-                    print(f"[Notify] Server {server.port} ACK: {reply.msg_type}")
-
-                    server.unreachable = False
-                    break  # stop retrying this server
-
-                else:
-                    print(f"[Notify] No reply from {server.port}, retrying...")
-                    timeout = min(timeout * 2, 8000)
+                server.unreachable = False
+                break  # stop retrying this server
 
             else:
-                # FAILED AFTER RETRIES
-                server.unreachable = True
-                print(f"[Notify] Server {server.port} marked UNREACHABLE.")
+                print(f"[Notify] No reply from {server.port}, retrying...")
+                timeout = min(timeout * 2, 8000)
 
-
-        
+        else:
+            # FAILED AFTER RETRIES
+            server.unreachable = True
+            server.actionQueue.append(ServerActions.NOTIFY)
+            print(f"[Notify] Server {server.port} marked UNREACHABLE.")
 
 
     def loop(self):
@@ -186,7 +188,9 @@ class ServerCommunicator(threading.Thread):
         print(f"[Network] Received message from {identity}: {message.msg_type}, {message.payload}")
         match message.msg_type:
             case MessageType.SERVER_INTRODUCTION:
-                self.handle_server_introduction(identity, message.payload)
+                self.thread_pool.submit(self.handle_server_introduction, identity, message.payload)
+            case MessageType.HEARTBEAT:
+                self.thread_pool.submit(self.handle_heartbeat, identity, message.payload)
             case _:
                 print(f"[Network] Unknown message type: {message.msg_type}")
 
@@ -214,6 +218,134 @@ class ServerCommunicator(threading.Thread):
             new_socket.send(ack_message.serialize())
             print(f"[Network] Sent SERVER_INTRODUCTION_ACK to new server on port {new_port}")
         print(f"[Network] Added new server: port {new_port}, hash {new_hash}")
+
+    def heartbeat(self):
+        while self.running:
+            print("[Heartbeat] Sending heartbeat to all servers...")
+
+            heartbeat_msg = Message(
+                MessageType.HEARTBEAT,
+                {"port": self.port, "hash": self.hash}
+            )
+
+            poller = pyzmq.Poller()
+
+            # 1. Send heartbeat to all servers and register sockets for poll
+            for server in self.servers:
+
+                if server.socket is None:
+                    s = self.context.socket(pyzmq.DEALER)
+                    s.connect(f"tcp://localhost:{server.port}")
+                    server.setSocket(s)
+
+                server.socket.send(heartbeat_msg.serialize())
+                poller.register(server.socket, pyzmq.POLLIN)
+
+            # 2. Poll all at once (shared timeout)
+            socks = dict(poller.poll(timeout=2000))  # 2 seconds for all
+
+            # 3. Process replies
+            for server in self.servers:
+                if server.socket in socks:
+                    reply_bytes = server.socket.recv()
+                    reply = Message(reply_bytes)
+                    print(f"[Heartbeat] ACK from {server.port}: {reply.msg_type}")
+                    server.unreachable = False
+                    
+                else:
+                    print(f"[Heartbeat] No ACK from {server.port} → UNREACHABLE")
+                    server.unreachable = True
+
+            if all(s.unreachable for s in self.servers):
+                print("[Heartbeat] All servers unreachable → disconnected")
+                self.disconnected = True
+
+            if any(not s.unreachable for s in self.servers) and self.disconnected:
+                print("[Heartbeat] Reconnected to at least one server, requesting config update")
+                self.disconnected = self.update_server_config( [s for s in self.servers if not s.unreachable] )
+
+        
+            # 4. Handle queued actions for now reachable servers
+            for server in self.servers:
+                if not server.unreachable and server.actionQueue:
+                    self.thread_pool.submit(self.handle_action_queue, server)
+                    
+            time.sleep(10)
+
+    def update_server_config(self, reachable_servers):
+        print("[Network] Updating server configuration from reachable servers...")
+
+        update_msg = Message(
+            MessageType.SERVER_CONFIG_UPDATE,
+            {"port": self.port, "hash": self.hash}
+        )
+
+        poller = self.context.socket(pyzmq.Poller)
+        
+        updated = False
+
+        for server in reachable_servers:
+
+            s = server.socket
+            if s is None:
+                s = self.context.socket(pyzmq.DEALER)
+                s.connect(f"tcp://localhost:{server.port}")
+                server.setSocket(s)
+
+            # Send update request
+            print(f"[Network] Requesting config update from {server.port}")
+            s.send(update_msg.serialize())
+
+            # Poll for response
+            poller = pyzmq.Poller()
+            poller.register(s, pyzmq.POLLIN)
+
+            socks = dict(poller.poll(timeout=2000))
+            if s not in socks:
+                print(f"[Network] No CONFIG_UPDATE_ACK from {server.port}.")
+                continue
+
+            # Receive ACK
+            reply_bytes = s.recv()
+            reply = Message(reply_bytes)
+
+            if reply.msg_type != MessageType.SERVER_CONFIG_UPDATE_ACK:
+                print(f"[Network] Wrong reply type from {server.port}: {reply.msg_type}")
+                continue
+
+            print(f"[Network] Received CONFIG_UPDATE_ACK from {server.port}")
+
+            ports = reply.payload["ports"]
+            hashes = reply.payload["hashes"]
+
+            for p, h in zip(ports, hashes):
+                if not any(srv.port == p for srv in self.servers):
+                    print(f"[Network] Added new server from update: {p}")
+                    new_server = Server(p, h)
+                    self.servers.append(new_server)
+
+            updated = True
+
+        return not updated  # return new disconnected state
+    
+    def handle_action_queue(self, server):
+        print(f"[Network] Handling action queue for server {server.port}")
+        while server.actionQueue:
+            action = server.actionQueue.pop(0)
+            match action:
+                case ServerActions.NOTIFY:
+                    self.notify_server(server)
+                case _:
+                    print(f"[Network] Unknown action in queue: {action}")
+
+        
+    
+
+    def handle_heartbeat(self, identity, payload):
+        print(f"[Network] Handling HEARTBEAT from {identity}: {payload}")
+        ack_message = Message(MessageType.HEARTBEAT_ACK, {})
+        self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
+        print(f"[Network] Sent HEARTBEAT_ACK to {identity}")
 
         
 
