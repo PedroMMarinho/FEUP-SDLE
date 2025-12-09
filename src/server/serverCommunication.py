@@ -31,11 +31,11 @@ class ServerCommunicator:
         self.poller = pyzmq.Poller()
         self.server_interface_socket = None
         self.servers = []
-        self.thread_pool = ThreadPool(4)
+        self.thread_pool = ThreadPool(8)
         self.disconnected = False
 
 
-    def start(self): # todo load action queue
+    def start(self): # TODO load action queue
         
         self.setup_server_interface_socket()
         print(f"[System] Starting server on port {self.port}...")
@@ -179,6 +179,7 @@ class ServerCommunicator:
                         self.handle_server_interface_socket()
 
         self.context.destroy()
+        self.thread_pool.shutdown()
         print("[System] Server stopped.")
 
 
@@ -394,12 +395,24 @@ class ServerCommunicator:
         print(f"[Network] Sent {message.msg_type} to {identity}")
 
     def handle_replica(self, identity, payload):
-        print(f"[Network] Handling REPLICA from {identity}: {payload}")
-        replica_list = payload["replica_list"]
-        self.storage.save_list(replica_list, is_replica=True)
+        print(f"[Network] Handling REPLICA from {identity}")
+
+        replica_items = payload["replica_list"]
+
+        # Normalize to a list
+        if isinstance(replica_items, dict):
+            replica_items = [replica_items]
+
+        print(f"[Network] Saving {len(replica_items)} replica items")
+
+        for item in replica_items:
+            self.storage.save_list(item, is_replica=True)
+
         ack_message = Message(MessageType.REPLICA_ACK, {})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
+
         print(f"[Network] Sent REPLICA_ACK to {identity}")
+
 
     def get_hashring_neighbors(self):
         sorted_servers = sorted(self.servers + [Server(self.port, self.hash)], 
@@ -463,12 +476,102 @@ class ServerCommunicator:
         return sorted_servers[0]  # wrap around
 
     def load_balance_back(self, new_server):
-        print(f"[Network] Load balancing back to {new_server.port}")
-        pass
+        print(f"[Network] Load balancing to {new_server.port}")
+
+        # 1. Collect local lists that now belong to new_server
+        all_lists = self.storage.get_all_non_replica_lists()
+
+        lists_to_send = [
+            lst for lst in all_lists
+            if self.get_intended_server(lst["uuid"]).port == new_server.port
+        ]
+
+        if not lists_to_send:
+            print("[LoadBalance] Nothing to transfer.")
+            return
+
+        print(f"[LoadBalance] Preparing to send {len(lists_to_send)} lists to server {new_server.port}")
+
+        # 2. Build message
+        message = Message(
+            MessageType.LOAD_BALANCE,
+            {"full_list": lists_to_send}
+        )
+
+        # 3. Ensure socket exists
+        if new_server.socket is None:
+            s = self.context.socket(pyzmq.DEALER)
+            s.connect(f"tcp://localhost:{new_server.port}")
+            new_server.setSocket(s)
+
+        socket = new_server.socket
+
+        # 4. Set up polling for ACK
+        poller = pyzmq.Poller()
+        poller.register(socket, pyzmq.POLLIN)
+
+        retries = 3
+        timeout = 1000  # ms
+
+        for attempt in range(1, retries + 1):
+
+            print(f"[LoadBalance] Sending LOAD_BALANCE to {new_server.port} "
+                f"(attempt {attempt}/{retries})")
+
+            socket.send(message.serialize())
+
+            socks = dict(poller.poll(timeout))
+
+            if socket in socks and socks[socket] == pyzmq.POLLIN:
+                # Received something
+                reply_bytes = socket.recv()
+                reply = Message(reply_bytes)
+
+                if reply.msg_type == MessageType.LOAD_BALANCE_ACK:
+                    print(f"[LoadBalance] LOAD_BALANCE_ACK received from {new_server.port}")
+
+                    return True
+
+                else:
+                    print(f"[LoadBalance] Unexpected reply ({reply.msg_type}). Retrying...")
+
+            else:
+                print(f"[LoadBalance] No LOAD_BALANCE_ACK from {new_server.port}, retrying...")
+                timeout = min(timeout * 2, 8000)
+
+        # FAILED AFTER RETRIES
+        print(f"[LoadBalance] FAILED: {new_server.port} didnt respond.")
+        new_server.actionQueue.append( (ServerActions.LOAD_BALANCE, None) )
+        return False
+
+
+            
 
     def load_balance_forward(self, new_server):
         print(f"[Network] Load balancing forward to {new_server.port}")
-        pass
+        result = self.load_balance_back(new_server)
+        if result:
+            print("[LoadBalance] Forward load balance successful. Deleting local copies of sent lists.")
+            replica_lists = self.storage.get_all_replica_lists()
+            for lst in replica_lists:
+                intended_server = self.get_intended_server(lst['uuid'])
+                if intended_server.port == new_server.port:
+                    self.storage.delete_list_by_id(lst['uuid'])
+
+    def handle_load_balance(self, identity, payload):
+        print(f"[Network] Handling LOAD_BALANCE from {identity}: {payload}")
+        full_lists = payload["full_list"]
+        for shop_list in full_lists:
+            self.storage.save_list(shop_list, is_replica=False)
+
+        ack_message = Message(MessageType.LOAD_BALANCE_ACK, {})
+        self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
+        print(f"[Network] Sent LOAD_BALANCE_ACK to {identity}")
+
+        self.thread_pool.submit(self.send_replicas_for_load_balanced_lists, full_lists)
+
+        
+
 
     def handle_sent_full_list(self, identity, payload):
         print(f"[Network] Handling SENT_FULL_LIST from {identity}: {payload}")
@@ -488,12 +591,18 @@ class ServerCommunicator:
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
         print(f"[Network] Sent SENT_FULL_LIST_ACK to {identity}")
 
-    def send_replica(self, server, shop_list):
-        print(f"[Network] Sending REPLICA to server {server.port} for list {shop_list['uuid']}")
+    def send_replica(self, server, shop_list): # TODO quorum logic - must send to 3 servers total if not correct they must do hinted handoff
+        # Normalize input: allow single item or list
+        if isinstance(shop_list, dict):
+            replica_list = [shop_list]
+        else:
+            replica_list = list(shop_list)  # make a shallow copy
+
+        print(f"[Network] Sending {len(replica_list)} replica items to server {server.port}")
 
         replica_message = Message(
             MessageType.REPLICA,
-            {"replica_list": shop_list}
+            {"replica_list": replica_list}
         )
 
         # Create or reuse socket
@@ -505,35 +614,40 @@ class ServerCommunicator:
             server_socket = server.socket
 
         retries = 3
-        base_timeout = 1000  # 1 second
-        timeout = base_timeout
+        timeout = 1000  # ms
+
+        poller = pyzmq.Poller()
+        poller.register(server_socket, pyzmq.POLLIN)
 
         for attempt in range(1, retries + 1):
-            print(f"[Replica] Sending REPLICA to server {server.port} (attempt {attempt}/{retries})")
+            print(f"[Replica] Sending REPLICA x{len(replica_list)} to server "
+                f"{server.port} (attempt {attempt}/{retries})")
 
             server_socket.send(replica_message.serialize())
-
-            poller = pyzmq.Poller()
-            poller.register(server_socket, pyzmq.POLLIN)
 
             socks = dict(poller.poll(timeout))
 
             if server_socket in socks and socks[server_socket] == pyzmq.POLLIN:
-                # SUCCESS
                 reply_bytes = server_socket.recv()
                 reply = Message(reply_bytes)
 
-                print(f"[Replica] Server {server.port} ACK: {reply.msg_type}")
+                if reply.msg_type == MessageType.REPLICA_ACK:
+                    print(f"[Replica] ACK received from {server.port}")
+                    return True
 
-                return  # stop retrying this server
+                print(f"[Replica] Unexpected reply: {reply.msg_type}")
 
             else:
                 print(f"[Replica] No reply from {server.port}, retrying...")
-                timeout = min(timeout * 2, 8000)
 
-        print(f"[Replica] Failed to send REPLICA to server {server.port} after retries.")
-        server.actionQueue.append( (ServerActions.REPLICA, shop_list) )
-        # todo add replica to db 
+            timeout = min(timeout * 2, 8000)
+
+        # FAILED AFTER RETRIES
+        print(f"[Replica] FAILED to send replicas to {server.port}, queueing action")
+        server.actionQueue.append((ServerActions.REPLICA, replica_list))
+
+        return False
+        # TODO the failed status + info of the replica send should be stored in db
 
     def send_hinted_handoff(self, server, shop_list):
         print(f"[Network] Sending HINTED_HANDOFF to server {server.port} for list {shop_list['uuid']}")

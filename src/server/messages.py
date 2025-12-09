@@ -16,6 +16,8 @@ class MessageType(Enum):
     SERVER_CONFIG_UPDATE_ACK = 12
     REPLICA = 13
     REPLICA_ACK = 14
+    LOAD_BALANCE = 15
+    LOAD_BALANCE_ACK = 16
 
 class Message:
     def __init__(self, msg_type, payload):

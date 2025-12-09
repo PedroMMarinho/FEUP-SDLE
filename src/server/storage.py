@@ -87,6 +87,7 @@ class ShoppingListStorage:
             return None
         finally:
             conn.close()
+            self.lock.release_read()
 
     def get_all_temporarily_stored_lists(self):
         self.lock.acquire_read()
@@ -103,6 +104,7 @@ class ShoppingListStorage:
             return lists
         finally:
             conn.close()
+            self.lock.release_read()
 
     def get_all_non_replica_lists(self):
         self.lock.acquire_read()
@@ -119,5 +121,33 @@ class ShoppingListStorage:
             return lists
         finally:
             conn.close()
+            self.lock.release_read()
+
+    def get_all_replicas(self): 
+        self.lock.acquire_read()
+        conn = self._get_conn()
+        replicas = []
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT crdt FROM ShoppingList WHERE isReplica=TRUE")
+                rows = cursor.fetchall()
+                
+                for row in rows:
+                    json_str = json.dumps(row[0]) 
+                    replicas.append(ShopList.from_json(json_str))
+            return replicas
+        finally:
+            conn.close()
+            self.lock.release_read()
+    
+    def delete_list_by_id(self, list_id):
+        self.lock.acquire_write()
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM ShoppingList WHERE uuid=%s", (list_id,))
+        finally:
+            conn.close()
+            self.lock.release_write()
 
 
