@@ -3,10 +3,12 @@ import psycopg2.extras
 from psycopg2 import DataError 
 from src.common.crdt.shop_list import ShopList
 import json
+import src.common.readWriteLock as ReadWriteLock
 
 class ShoppingListStorage:
     def __init__(self, db_config):
         self.db_config = db_config
+        self.lock = ReadWriteLock.ReadWriteLock()
         try:
             conn = self._get_conn()
             conn.close()
@@ -31,6 +33,7 @@ class ShoppingListStorage:
             conn.close()
 
     def save_list(self, shop_list, name=None, is_replica=False, intended_server_hash=None):
+        self.lock.acquire_write()
         conn = self._get_conn()
         try:
             with conn.cursor() as cursor:
@@ -69,6 +72,7 @@ class ShoppingListStorage:
             self.lock.release_write()
 
     def get_list_by_id(self, list_id):
+        self.lock.acquire_read()
         conn = self._get_conn()
         try:
             with conn.cursor() as cursor:
@@ -85,6 +89,7 @@ class ShoppingListStorage:
             conn.close()
 
     def get_all_temporarily_stored_lists(self):
+        self.lock.acquire_read()
         conn = self._get_conn()
         lists = []
         try:
@@ -100,6 +105,7 @@ class ShoppingListStorage:
             conn.close()
 
     def get_all_non_replica_lists(self):
+        self.lock.acquire_read()
         conn = self._get_conn()
         lists = []
         try:

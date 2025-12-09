@@ -19,8 +19,8 @@ class Server():
         self.socket = socket
 
 class ServerCommunicator:
-    def __init__(self, db_config, port, seed, known_server_port):
-        self.db_config = db_config
+    def __init__(self, storage, port, seed, known_server_port):
+        self.storage = storage
         self.port = port
         self.hash = hashlib.sha256(f"server_{port}".encode()).hexdigest()
         self.seed = seed
@@ -35,7 +35,7 @@ class ServerCommunicator:
         self.disconnected = False
 
 
-    def start(self):
+    def start(self): # todo load action queue
         
         self.setup_server_interface_socket()
         print(f"[System] Starting server on port {self.port}...")
@@ -165,7 +165,7 @@ class ServerCommunicator:
         else:
             # FAILED AFTER RETRIES
             server.unreachable = True
-            server.actionQueue.append(ServerActions.NOTIFY)
+            server.actionQueue.append((ServerActions.NOTIFY, None))
             print(f"[Notify] Server {server.port} marked UNREACHABLE.")
 
 
@@ -191,6 +191,14 @@ class ServerCommunicator:
                 self.thread_pool.submit(self.handle_server_introduction, identity, message.payload)
             case MessageType.HEARTBEAT:
                 self.thread_pool.submit(self.handle_heartbeat, identity, message.payload)
+            case MessageType.SERVER_CONFIG_UPDATE:
+                self.thread_pool.submit(self.handle_server_config_update, identity, message.payload)
+            case MessageType.REQUEST_FULL_LIST:
+                self.thread_pool.submit(self.handle_request_full_list, identity, message.payload)
+            case MessageType.REPLICA:
+                self.thread_pool.submit(self.handle_replica, identity, message.payload)
+            case MessageType.SENT_FULL_LIST:
+                self.thread_pool.submit(self.handle_sent_full_list, identity, message.payload)
             case _:
                 print(f"[Network] Unknown message type: {message.msg_type}")
 
@@ -218,6 +226,15 @@ class ServerCommunicator:
             new_socket.send(ack_message.serialize())
             print(f"[Network] Sent SERVER_INTRODUCTION_ACK to new server on port {new_port}")
         print(f"[Network] Added new server: port {new_port}, hash {new_hash}")
+
+        back,forward = self.get_hashring_neighbors()
+        if back and back.port == new_port:
+            print(f"[Network] New server {new_port} is my back neighbor. Sending lists.")
+            self.thread_pool.submit(self.load_balance_back, new_server)
+
+        if forward and forward.port == new_port:
+            print(f"[Network] New server {new_port} is my forward neighbor. Sending lists.")
+            self.thread_pool.submit(self.load_balance_forward, new_server)
 
     def heartbeat(self):
         while self.running:
@@ -332,14 +349,29 @@ class ServerCommunicator:
         print(f"[Network] Handling action queue for server {server.port}")
         while server.actionQueue:
             action = server.actionQueue.pop(0)
-            match action:
+            match action[0]:
                 case ServerActions.NOTIFY:
                     self.notify_server(server)
+                case ServerActions.SEND_HINTED_HANDOFF:
+                    self.send_hinted_handoff(server)
+                case ServerActions.REPLICA:
+                    self.send_replica(server, action[1])
                 case _:
                     print(f"[Network] Unknown action in queue: {action}")
 
-        
-    
+    def handle_server_config_update(self, identity, payload):
+        print(f"[Network] Handling SERVER_CONFIG_UPDATE from {identity}: {payload}")
+
+        ports = [s.port for s in self.servers]
+        hashes = [s.hash for s in self.servers]
+
+        ack_message = Message(
+            MessageType.SERVER_CONFIG_UPDATE_ACK,
+            {"ports": ports, "hashes": hashes}
+        )
+
+        self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
+        print(f"[Network] Sent SERVER_CONFIG_UPDATE_ACK to {identity}")
 
     def handle_heartbeat(self, identity, payload):
         print(f"[Network] Handling HEARTBEAT from {identity}: {payload}")
@@ -347,5 +379,162 @@ class ServerCommunicator:
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
         print(f"[Network] Sent HEARTBEAT_ACK to {identity}")
 
-        
+    def handle_request_full_list(self, identity, payload): # TODO missing quorum logic
+        print(f"[Network] Handling REQUEST_FULL_LIST from {identity}: {payload}")
+        full_list = self.storage.get_list_by_id(payload["list_id"])
+        message = None
+        if full_list is None:
+            print(f"[Network] No list found with ID {payload['list_id']}")
+            message = Message(MessageType.REQUEST_FULL_LIST_NACK, {})
 
+        else:
+            message = Message(MessageType.REQUEST_FULL_LIST_ACK, {"full_list": full_list})
+
+        self.server_interface_socket.send_multipart([identity, message.serialize()])
+        print(f"[Network] Sent {message.msg_type} to {identity}")
+
+    def handle_replica(self, identity, payload):
+        print(f"[Network] Handling REPLICA from {identity}: {payload}")
+        replica_list = payload["replica_list"]
+        self.storage.save_list(replica_list, is_replica=True)
+        ack_message = Message(MessageType.REPLICA_ACK, {})
+        self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
+        print(f"[Network] Sent REPLICA_ACK to {identity}")
+
+    def get_hashring_neighbors(self):
+        sorted_servers = sorted(self.servers + [Server(self.port, self.hash)], 
+                                key=lambda s: s.hash)
+
+        # Only 1 server → no neighbors
+        if len(sorted_servers) == 1:
+            return None, None
+
+        current_index = next(i for i, s in enumerate(sorted_servers) if s.port == self.port)
+
+        left_neighbor  = sorted_servers[current_index - 1]
+        right_neighbor = sorted_servers[(current_index + 1) % len(sorted_servers)]
+
+        return left_neighbor, right_neighbor
+
+    
+    def get_next2_servers(self):
+        sorted_servers = sorted(
+            self.servers + [Server(self.port, self.hash)],
+            key=lambda s: s.hash
+        )
+
+        # Only yourself → no next servers
+        if len(sorted_servers) <= 1:
+            return []
+
+        current_index = next(
+            i for i, s in enumerate(sorted_servers)
+            if s.port == self.port
+        )
+
+        next_servers = []
+        seen = {self.port}  # avoid yourself
+
+        # Walk forward in the ring
+        for i in range(1, len(sorted_servers)):
+            next_server = sorted_servers[(current_index + i) % len(sorted_servers)]
+
+            if next_server.port not in seen:
+                next_servers.append(next_server)
+                seen.add(next_server.port)
+
+            if len(next_servers) == 2:
+                break
+
+        return next_servers
+    
+    def get_intended_server(self, list_id):
+        sorted_servers = sorted(
+            self.servers + [Server(self.port, self.hash)],
+            key=lambda s: s.hash
+        )
+
+        list_hash = hashlib.sha256(list_id.encode()).hexdigest()
+
+        for server in sorted_servers:
+            if server.hash <= list_hash:
+                return server
+
+        return sorted_servers[0]  # wrap around
+
+    def load_balance_back(self, new_server):
+        print(f"[Network] Load balancing back to {new_server.port}")
+        pass
+
+    def load_balance_forward(self, new_server):
+        print(f"[Network] Load balancing forward to {new_server.port}")
+        pass
+
+    def handle_sent_full_list(self, identity, payload):
+        print(f"[Network] Handling SENT_FULL_LIST from {identity}: {payload}")
+        full_list = payload["full_list"]
+        back,forward = self.get_hashring_neighbors()
+        if forward and self.hash <= hashlib.sha256(full_list['uuid'].encode()).hexdigest() < forward.hash:
+            self.storage.save_list(full_list, is_replica=False)
+            for next_server in self.get_next2_servers():
+                self.thread_pool.submit(self.send_replica, next_server, full_list)
+        else: # hinted handoff
+            intended_server = self.get_intended_server(full_list['uuid'])
+            self.storage.save_list(full_list, is_replica=True, intended_server_hash=intended_server.hash)
+            intended_server.actionQueue.append( (ServerActions.SEND_HINTED_HANDOFF, full_list) )
+
+
+        ack_message = Message(MessageType.SENT_FULL_LIST_ACK, {})
+        self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
+        print(f"[Network] Sent SENT_FULL_LIST_ACK to {identity}")
+
+    def send_replica(self, server, shop_list):
+        print(f"[Network] Sending REPLICA to server {server.port} for list {shop_list['uuid']}")
+
+        replica_message = Message(
+            MessageType.REPLICA,
+            {"replica_list": shop_list}
+        )
+
+        # Create or reuse socket
+        if server.socket is None:
+            server_socket = self.context.socket(pyzmq.DEALER)
+            server_socket.connect(f"tcp://localhost:{server.port}")
+            server.setSocket(server_socket)
+        else:
+            server_socket = server.socket
+
+        retries = 3
+        base_timeout = 1000  # 1 second
+        timeout = base_timeout
+
+        for attempt in range(1, retries + 1):
+            print(f"[Replica] Sending REPLICA to server {server.port} (attempt {attempt}/{retries})")
+
+            server_socket.send(replica_message.serialize())
+
+            poller = pyzmq.Poller()
+            poller.register(server_socket, pyzmq.POLLIN)
+
+            socks = dict(poller.poll(timeout))
+
+            if server_socket in socks and socks[server_socket] == pyzmq.POLLIN:
+                # SUCCESS
+                reply_bytes = server_socket.recv()
+                reply = Message(reply_bytes)
+
+                print(f"[Replica] Server {server.port} ACK: {reply.msg_type}")
+
+                return  # stop retrying this server
+
+            else:
+                print(f"[Replica] No reply from {server.port}, retrying...")
+                timeout = min(timeout * 2, 8000)
+
+        print(f"[Replica] Failed to send REPLICA to server {server.port} after retries.")
+        server.actionQueue.append( (ServerActions.REPLICA, shop_list) )
+        # todo add replica to db 
+
+    def send_hinted_handoff(self, server, shop_list):
+        print(f"[Network] Sending HINTED_HANDOFF to server {server.port} for list {shop_list['uuid']}")
+        pass

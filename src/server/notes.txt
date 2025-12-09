@@ -1,8 +1,6 @@
-notify_other_servers can be done with all servers at the same time, polling the sockets to determine which servers responded, but its complicated (Not done, small optimization)
-Add unreachable server heartbeat mechanism (Not done, Important)
 Hinted Handoff (dependant on heartbeat, not done, important)
 Hash Ring Logic (not done, important)
 Proxy Connection (not done, important)
-Ping System for recognizing own disconnect and request new server config update (dont know if needed or optimal)
 
-
+i think server_config_update might need to lock all other handlers to maintain consistency
+in list request read from main + replicas (instead of just any )

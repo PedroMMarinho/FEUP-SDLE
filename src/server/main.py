@@ -66,7 +66,7 @@ def main():
     storage = ServerStorage(db_config)
     storage.initialize_schema()
 
-    comm = ServerCommunicator(db_config, args.port, args.seed, args.known_server_port)
+    comm = ServerCommunicator(storage, args.port, args.seed, args.known_server_port)
     comm.start()
     
 
