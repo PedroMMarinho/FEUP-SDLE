@@ -23,10 +23,11 @@ class ShoppingListStorage:
         """Creates tables if they don't exist."""
         conn = self._get_conn()
         try:
-            with open('src/client/db.sql', 'r') as f:
-                with conn.cursor() as cur:
-                    cur.execute(f.read())
-            print("[Storage] Schema initialized.")
+            with conn:
+                with open('src/client/db.sql', 'r') as f:
+                    with conn.cursor() as cur:
+                        cur.execute(f.read())
+                print("[Storage] Schema initialized.")
         finally:
             conn.close()
 
@@ -83,42 +84,72 @@ class ShoppingListStorage:
         self.lock.acquire_write()
         conn = self._get_conn()
         try:
-            crdt_blob = json.dumps(self._crdt_to_dict(shop_list))
-            list_uuid = getattr(shop_list, 'uuid', shop_list.id)
+            with conn:
+                with conn.cursor() as cursor:
+                    list_uuid = getattr(shop_list, 'uuid', shop_list.id)
 
-            with conn.cursor() as cursor:
-                if name:
                     cursor.execute(
-                        "INSERT INTO ShoppingList (uuid, name, crdt, logical_clock) VALUES (%s, %s, %s, %s) "
-                        "ON CONFLICT(uuid) DO UPDATE SET crdt=excluded.crdt, name=excluded.name, logical_clock=excluded.logical_clock",
+                        "SELECT crdt, name FROM ShoppingList WHERE uuid=%s FOR UPDATE", 
+                        (list_uuid,)
+                    )
+                    row = cursor.fetchone()
+
+                    if row:
+                        db_crdt_json = row[0]
+                        existing_name = row[1]
+                    
+                        if name is None:
+                            name = existing_name
+
+                        if isinstance(db_crdt_json, str):
+                            db_crdt_json = json.loads(db_crdt_json)
+                        
+                        db_list = self._reconstruct_crdt(db_crdt_json)
+                        shop_list.merge(db_list)
+
+                    crdt_blob = json.dumps(self._crdt_to_dict(shop_list))
+                    
+                    cursor.execute(
+                        """
+                        INSERT INTO ShoppingList (uuid, name, crdt, logical_clock) 
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT(uuid) DO UPDATE 
+                        SET crdt=excluded.crdt, 
+                            name=COALESCE(excluded.name, ShoppingList.name),
+                            logical_clock=excluded.logical_clock
+                        """,
                         (list_uuid, name, crdt_blob, shop_list.clock)
                     )
-                else:
-                    cursor.execute(
-                        "UPDATE ShoppingList SET crdt=%s, logical_clock=%s WHERE uuid=%s",
-                        (crdt_blob, shop_list.clock, list_uuid)
-                    )
-
-                cursor.execute("DELETE FROM ShoppingListItem WHERE shopping_list_uuid=%s", (list_uuid,))
-                
-                visible_items = shop_list.get_visible_items()
-                items_to_insert = []
-                
-                for item_name, counts in visible_items.items():
-                    items_to_insert.append((
-                        list_uuid,
-                        item_name,
-                        counts['needed'],
-                        counts['acquired'],
-                        0 
-                    ))
+                    cursor.execute("DELETE FROM ShoppingListItem WHERE shopping_list_uuid=%s", (list_uuid,))
                     
-                if items_to_insert:
-                    cursor.executemany(
-                        "INSERT INTO ShoppingListItem (shopping_list_uuid, name, quantityNeeded, quantityAcquired, position) "
-                        "VALUES (%s, %s, %s, %s, %s)",
-                        items_to_insert
-                    )
+                    visible_items = shop_list.get_visible_items()
+                    items_to_insert = []
+                    
+                    for item_name, counts in visible_items.items():
+
+                        raw_needed = counts['needed']
+                        raw_acquired = counts['acquired']
+
+                        display_needed = max(0, raw_needed)
+                        display_acquired = max(0, raw_acquired)
+
+                        items_to_insert.append((
+                            list_uuid,
+                            item_name,
+                            display_needed,
+                            display_acquired,
+                            0 
+                        ))
+                        
+                    if items_to_insert:
+                        cursor.executemany(
+                            "INSERT INTO ShoppingListItem (shopping_list_uuid, name, quantityNeeded, quantityAcquired, position) "
+                            "VALUES (%s, %s, %s, %s, %s)",
+                            items_to_insert
+                        )
+        except Exception as e:
+            print(f"[Storage] Error saving list: {e}")
+            raise e
         finally:
             conn.close()
             self.lock.release_write()

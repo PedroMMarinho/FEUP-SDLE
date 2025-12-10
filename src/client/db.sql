@@ -11,8 +11,7 @@ CREATE TABLE IF NOT EXISTS ShoppingListItem (
     name TEXT NOT NULL,
     quantityNeeded INTEGER NOT NULL,
     quantityAcquired INTEGER NOT NULL,
-    position INTEGER NOT NULL,
-    CHECK (quantityNeeded >= 0 AND quantityAcquired >= 0)
+    position INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_shopping_list_uuid 
