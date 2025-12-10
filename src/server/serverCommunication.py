@@ -1,7 +1,6 @@
 import hashlib
-from http import server
 import pyzmq
-from src.server.messages import Message, MessageType
+from common.messages.messages import Message, MessageType
 from src.common.threadPool.threadPool import ThreadPool
 from src.server.actions import ServerActions
 import time 
@@ -206,25 +205,20 @@ class ServerCommunicator:
     def handle_server_introduction(self, identity, payload):
         print(f"[Network] Handling SERVER_INTRODUCTION from {identity}: {payload}")
 
-        identity, msg_bytes = self.seedSocket.recv_multipart()
+        identity, msg_bytes = self.server_interface_socket.recv_multipart()
         message = Message(msg_bytes)
         print(f"[Network] Received message from {identity}: {message.msg_type}, {message.payload}")
         new_port = message.payload["port"]
         new_hash = message.payload["hash"]
 
-        new_server = Server(new_port, new_hash)
-        self.servers.append(new_server)
-        new_socket = self.context.socket(pyzmq.DEALER)
-        new_socket.connect(f"tcp://localhost:{new_port}")
-        new_server.setSocket(new_socket)
 
         if self.seed:
             ack_message = Message(MessageType.SERVER_INTRODUCTION_ACK, {"ports": [s.port for s in self.servers], "hashes": [s.hash for s in self.servers]})
-            self.seedSocket.send_multipart([identity, ack_message.serialize()])
+            self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
             print(f"[Network] Sent SERVER_INTRODUCTION_ACK to new server on port {new_port}")
         else:
             ack_message = Message(MessageType.SERVER_INTRODUCTION_ACK, {})
-            new_socket.send(ack_message.serialize())
+            self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
             print(f"[Network] Sent SERVER_INTRODUCTION_ACK to new server on port {new_port}")
         print(f"[Network] Added new server: port {new_port}, hash {new_hash}")
 
@@ -290,7 +284,7 @@ class ServerCommunicator:
                     
             time.sleep(10)
 
-    def update_server_config(self, reachable_servers):
+    def update_server_config(self, reachable_servers): # TODO fix this 
         print("[Network] Updating server configuration from reachable servers...")
 
         update_msg = Message(

@@ -1,0 +1,6 @@
+To do:
+Connection to proxy (endpoints + subscribe)
+
+Fixes needed: 
+
+CRDTs are not being merged, keep shoppingLists loaded and merge on save_list() before saving to db

@@ -18,6 +18,10 @@ class MessageType(Enum):
     REPLICA_ACK = 14
     LOAD_BALANCE = 15
     LOAD_BALANCE_ACK = 16
+    PROXY_INTRODUCTION = 17
+    PROXY_INTRODUCTION_ACK = 18
+    HASHRING_UPDATE = 19
+    HASHRING_UPDATE_ACK = 20
 
 class Message:
     def __init__(self, msg_type, payload):

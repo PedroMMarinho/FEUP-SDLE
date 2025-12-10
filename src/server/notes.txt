@@ -1,7 +1,13 @@
-Hinted Handoff (dependant on heartbeat, not done, important)
-Hash Ring Logic (not done, important)
+To do:
 Proxy Connection (not done, important)
+Server removal
 
+
+Fixes needed: 
+
+CRDTs are not being merged, keep shoppingLists loaded and merge on save_list() before saving to db
 i think server_config_update might need to lock all other handlers to maintain consistency
 in list request read from main + replicas (instead of just any )
+in send replica send to any (instead of not sending if unavailable) 
 the action queue needs to be stored in db together with all relevant info to perform each action so that its resilient against crashes
+hinted handoff cannot use the stored server hash since hash ring can update, rendering it unusable ( replace with just boolean, choosing server logic done on server)

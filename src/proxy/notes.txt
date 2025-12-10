@@ -1,0 +1,6 @@
+To do: 
+
+Connection to server ( idk how )
+Hash ring update ( subcribe? )
+Endpoints for client 
+
