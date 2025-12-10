@@ -11,3 +11,6 @@ in list request read from main + replicas (instead of just any )
 in send replica send to any (instead of not sending if unavailable) 
 the action queue needs to be stored in db together with all relevant info to perform each action so that its resilient against crashes
 hinted handoff cannot use the stored server hash since hash ring can update, rendering it unusable ( replace with just boolean, choosing server logic done on server)
+when a new server is added they are the one that needs to request other server's lists
+gossip system 
+you can assume that you know which servers are deployed to init new server

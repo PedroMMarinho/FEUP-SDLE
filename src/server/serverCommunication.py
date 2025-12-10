@@ -69,8 +69,8 @@ class ServerCommunicator:
         seedPoller.register(seedSocket, pyzmq.POLLIN)
 
         message = Message(
-            MessageType.SERVER_INTRODUCTION,
-            {"port": self.port, "hash": self.hash}
+            msg_type=MessageType.SERVER_INTRODUCTION,
+            payload={"port": self.port, "hash": self.hash}
         )
 
         retries = 5
@@ -85,7 +85,7 @@ class ServerCommunicator:
             if seedSocket in socks and socks[seedSocket] == pyzmq.POLLIN:
                 # SUCCESS
                 msg_bytes = seedSocket.recv()
-                response = Message(msg_bytes)
+                response = Message(json_str=msg_bytes)
 
                 if response.msg_type == MessageType.SERVER_INTRODUCTION_ACK:
                     hashes = response.payload["hashes"]
@@ -118,8 +118,8 @@ class ServerCommunicator:
 
     def notify_server(self, server):
         notify_message = Message(
-            MessageType.SERVER_INTRODUCTION,
-            {"port": self.port, "hash": self.hash}
+            msg_type=MessageType.SERVER_INTRODUCTION,
+            payload={"port": self.port, "hash": self.hash}
         )
 
         retries = 3
@@ -150,7 +150,7 @@ class ServerCommunicator:
             if server_socket in socks and socks[server_socket] == pyzmq.POLLIN:
                 # SUCCESS
                 reply_bytes = server_socket.recv()
-                reply = Message(reply_bytes)
+                reply = Message(json_str=reply_bytes)
 
                 print(f"[Notify] Server {server.port} ACK: {reply.msg_type}")
 
@@ -184,7 +184,7 @@ class ServerCommunicator:
 
     def handle_server_interface_socket(self):
         identity, msg_bytes = self.server_interface_socket.recv_multipart()
-        message = Message(msg_bytes)
+        message = Message(json_str=msg_bytes)
         print(f"[Network] Received message from {identity}: {message.msg_type}, {message.payload}")
         match message.msg_type:
             case MessageType.SERVER_INTRODUCTION:
@@ -206,23 +206,23 @@ class ServerCommunicator:
         print(f"[Network] Handling SERVER_INTRODUCTION from {identity}: {payload}")
 
         identity, msg_bytes = self.server_interface_socket.recv_multipart()
-        message = Message(msg_bytes)
+        message = Message(json_str=msg_bytes)
         print(f"[Network] Received message from {identity}: {message.msg_type}, {message.payload}")
         new_port = message.payload["port"]
         new_hash = message.payload["hash"]
 
 
         if self.seed:
-            ack_message = Message(MessageType.SERVER_INTRODUCTION_ACK, {"ports": [s.port for s in self.servers], "hashes": [s.hash for s in self.servers]})
+            ack_message = Message(msg_type=MessageType.SERVER_INTRODUCTION_ACK, payload={"ports": [s.port for s in self.servers], "hashes": [s.hash for s in self.servers]})
             self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
             print(f"[Network] Sent SERVER_INTRODUCTION_ACK to new server on port {new_port}")
         else:
-            ack_message = Message(MessageType.SERVER_INTRODUCTION_ACK, {})
+            ack_message = Message(msg_type=MessageType.SERVER_INTRODUCTION_ACK, payload={})
             self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
             print(f"[Network] Sent SERVER_INTRODUCTION_ACK to new server on port {new_port}")
         print(f"[Network] Added new server: port {new_port}, hash {new_hash}")
 
-        back,forward = self.get_hashring_neighbors()
+        back,forward = self.get_hashring_neighbors() # TODO incorrect logic here - new servers need to asked to send load balance instead
         if back and back.port == new_port:
             print(f"[Network] New server {new_port} is my back neighbor. Sending lists.")
             self.thread_pool.submit(self.load_balance_back, new_server)
@@ -236,8 +236,8 @@ class ServerCommunicator:
             print("[Heartbeat] Sending heartbeat to all servers...")
 
             heartbeat_msg = Message(
-                MessageType.HEARTBEAT,
-                {"port": self.port, "hash": self.hash}
+                msg_type=MessageType.HEARTBEAT,
+                payload={"port": self.port, "hash": self.hash}
             )
 
             poller = pyzmq.Poller()
@@ -260,7 +260,7 @@ class ServerCommunicator:
             for server in self.servers:
                 if server.socket in socks:
                     reply_bytes = server.socket.recv()
-                    reply = Message(reply_bytes)
+                    reply = Message(json_str=reply_bytes)
                     print(f"[Heartbeat] ACK from {server.port}: {reply.msg_type}")
                     server.unreachable = False
                     
@@ -288,8 +288,8 @@ class ServerCommunicator:
         print("[Network] Updating server configuration from reachable servers...")
 
         update_msg = Message(
-            MessageType.SERVER_CONFIG_UPDATE,
-            {"port": self.port, "hash": self.hash}
+            msg_type=MessageType.SERVER_CONFIG_UPDATE,
+            payload={"port": self.port, "hash": self.hash}
         )
 
         poller = self.context.socket(pyzmq.Poller)
@@ -319,7 +319,7 @@ class ServerCommunicator:
 
             # Receive ACK
             reply_bytes = s.recv()
-            reply = Message(reply_bytes)
+            reply = Message(json_str=reply_bytes)
 
             if reply.msg_type != MessageType.SERVER_CONFIG_UPDATE_ACK:
                 print(f"[Network] Wrong reply type from {server.port}: {reply.msg_type}")
@@ -378,8 +378,8 @@ class ServerCommunicator:
         hashes = [s.hash for s in self.servers]
 
         ack_message = Message(
-            MessageType.SERVER_CONFIG_UPDATE_ACK,
-            {"ports": ports, "hashes": hashes}
+            msg_type=MessageType.SERVER_CONFIG_UPDATE_ACK,
+            payload={"ports": ports, "hashes": hashes}
         )
 
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
@@ -387,7 +387,7 @@ class ServerCommunicator:
 
     def handle_heartbeat(self, identity, payload):
         print(f"[Network] Handling HEARTBEAT from {identity}: {payload}")
-        ack_message = Message(MessageType.HEARTBEAT_ACK, {})
+        ack_message = Message(msg_type=MessageType.HEARTBEAT_ACK, payload={})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
         print(f"[Network] Sent HEARTBEAT_ACK to {identity}")
 
@@ -397,10 +397,10 @@ class ServerCommunicator:
         message = None
         if full_list is None:
             print(f"[Network] No list found with ID {payload['list_id']}")
-            message = Message(MessageType.REQUEST_FULL_LIST_NACK, {})
+            message = Message(msg_type=MessageType.REQUEST_FULL_LIST_NACK, payload={})
 
         else:
-            message = Message(MessageType.REQUEST_FULL_LIST_ACK, {"full_list": full_list})
+            message = Message(msg_type=MessageType.REQUEST_FULL_LIST_ACK, payload={"full_list": full_list})
 
         self.server_interface_socket.send_multipart([identity, message.serialize()])
         print(f"[Network] Sent {message.msg_type} to {identity}")
@@ -419,7 +419,7 @@ class ServerCommunicator:
         for item in replica_items:
             self.storage.save_list(item, is_replica=True)
 
-        ack_message = Message(MessageType.REPLICA_ACK, {})
+        ack_message = Message(msg_type=MessageType.REPLICA_ACK, payload={})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
 
         print(f"[Network] Sent REPLICA_ACK to {identity}")
@@ -505,8 +505,8 @@ class ServerCommunicator:
 
         # 2. Build message
         message = Message(
-            MessageType.LOAD_BALANCE,
-            {"full_list": lists_to_send}
+            msg_type=MessageType.LOAD_BALANCE,
+            payload={"full_list": lists_to_send}
         )
 
         # 3. Ensure socket exists
@@ -536,7 +536,7 @@ class ServerCommunicator:
             if socket in socks and socks[socket] == pyzmq.POLLIN:
                 # Received something
                 reply_bytes = socket.recv()
-                reply = Message(reply_bytes)
+                reply = Message(json_str=reply_bytes)
 
                 if reply.msg_type == MessageType.LOAD_BALANCE_ACK:
                     print(f"[LoadBalance] LOAD_BALANCE_ACK received from {new_server.port}")
@@ -575,7 +575,7 @@ class ServerCommunicator:
         for shop_list in full_lists:
             self.storage.save_list(shop_list, is_replica=False)
 
-        ack_message = Message(MessageType.LOAD_BALANCE_ACK, {})
+        ack_message = Message(msg_type=MessageType.LOAD_BALANCE_ACK, payload={})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
         print(f"[Network] Sent LOAD_BALANCE_ACK to {identity}")
 
@@ -598,7 +598,7 @@ class ServerCommunicator:
             intended_server.actionQueue.append( (ServerActions.SEND_HINTED_HANDOFF, full_list) )
 
 
-        ack_message = Message(MessageType.SENT_FULL_LIST_ACK, {})
+        ack_message = Message(msg_type=MessageType.SENT_FULL_LIST_ACK, payload={})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
         print(f"[Network] Sent SENT_FULL_LIST_ACK to {identity}")
 
@@ -612,8 +612,8 @@ class ServerCommunicator:
         print(f"[Network] Sending {len(replica_list)} replica items to server {server.port}")
 
         replica_message = Message(
-            MessageType.REPLICA,
-            {"replica_list": replica_list}
+            msg_type=MessageType.REPLICA,
+            payload={"replica_list": replica_list}
         )
 
         # Create or reuse socket
@@ -640,7 +640,7 @@ class ServerCommunicator:
 
             if server_socket in socks and socks[server_socket] == pyzmq.POLLIN:
                 reply_bytes = server_socket.recv()
-                reply = Message(reply_bytes)
+                reply = Message(json_str=reply_bytes)
 
                 if reply.msg_type == MessageType.REPLICA_ACK:
                     print(f"[Replica] ACK received from {server.port}")
@@ -664,8 +664,8 @@ class ServerCommunicator:
         print(f"[Network] Sending HINTED_HANDOFF to server {server.port} for list {shop_list['uuid']}")
 
         message = Message(
-            MessageType.SENT_FULL_LIST,
-            {"full_list": shop_list}
+            msg_type=MessageType.SENT_FULL_LIST,
+            payload={"full_list": shop_list}
         )
 
         # Create / reuse socket
@@ -692,7 +692,7 @@ class ServerCommunicator:
 
             if s in socks and socks[s] == pyzmq.POLLIN:
                 reply_bytes = s.recv()
-                reply = Message(reply_bytes)
+                reply = Message(json_str=reply_bytes)
 
                 if reply.msg_type == MessageType.SENT_FULL_LIST_ACK:
                     print(f"[Handoff] SENT_FULL_LIST_ACK received from {server.port}")

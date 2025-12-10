@@ -1,6 +1,6 @@
 from src.common.crdt.improved.GCounter import GCounter
 
-class PNCounter:
+class 12PNCounter:
     def __init__(self):
         self.positive = GCounter()
         self.negative = GCounter()

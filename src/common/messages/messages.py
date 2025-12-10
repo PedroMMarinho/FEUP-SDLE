@@ -24,13 +24,14 @@ class MessageType(Enum):
     HASHRING_UPDATE_ACK = 20
 
 class Message:
-    def __init__(self, msg_type, payload):
-        self.msg_type = msg_type
-        self.payload = payload
-    def __init__(self, json_str):
-        data = json.loads(json_str)
-        self.msg_type = MessageType(data["msg_type"])
-        self.payload = data["payload"]
+    def __init__(self, msg_type=None, payload=None, json_str=None):
+        if json_str is not None:
+            data = json.loads(json_str)
+            self.msg_type = MessageType(data["msg_type"])
+            self.payload = data["payload"]
+        else:
+            self.msg_type = msg_type
+            self.payload = payload
 
     def serialize(self):
         return json.dumps(self.to_dict()).encode('utf-8')

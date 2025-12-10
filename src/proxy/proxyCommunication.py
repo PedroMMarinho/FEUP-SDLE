@@ -68,7 +68,7 @@ class ProxyCommunicator:
 
     def handle_proxy_interface_socket(self):
         identity, msg_bytes = self.proxy_interface_socket.recv_multipart()
-        message = Message(msg_bytes)
+        message = Message(json_str=msg_bytes)
         print(f"[Network] Received message from {identity}: {message.msg_type}, {message.payload}")
         match message.msg_type:
             case _:
@@ -76,7 +76,7 @@ class ProxyCommunicator:
 
     def handle_heartbeat(self, identity, payload):
         print(f"[Network] Handling HEARTBEAT from {identity}: {payload}")
-        ack_message = Message(MessageType.HEARTBEAT_ACK, {})
+        ack_message = Message(msg_type=MessageType.HEARTBEAT_ACK, payload={})
         self.proxy_interface_socket.send_multipart([identity, ack_message.serialize()])
         print(f"[Network] Sent HEARTBEAT_ACK to {identity}")
     
@@ -89,7 +89,7 @@ class ProxyCommunicator:
         new_socket.connect(f"tcp://localhost:{payload['port']}")
         new_proxy.setSocket(new_socket)
 
-        ack_message = Message(MessageType.PROXY_INTRODUCTION_ACK)
+        ack_message = Message(msg_type=MessageType.PROXY_INTRODUCTION_ACK, payload={})
         self.proxy_interface_socket.send_multipart([identity, ack_message.serialize()])
         print(f"[Network] Sent PROXY_INTRODUCTION_ACK to {identity}")
 
@@ -109,8 +109,8 @@ class ProxyCommunicator:
         for port in [s.port for s in self.servers]: # very inefficient but whatever
             if port not in new_ports:
                 self.servers = [s for s in self.servers if s.port != port]
-            
-        message = Message(MessageType.HASHRING_UPDATE_ACK)
+
+        message = Message(msg_type=MessageType.HASHRING_UPDATE_ACK, payload={})
         self.proxy_interface_socket.send_multipart([identity, message.serialize()])
         
         print(f"[Network] Updated hashring with ports: {new_ports} and hashes: {new_hashes}")
