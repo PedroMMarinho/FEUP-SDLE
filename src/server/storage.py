@@ -1,7 +1,7 @@
 import psycopg2
 import psycopg2.extras
 from psycopg2 import DataError 
-from src.common.crdt.shop_list import ShopList
+from src.common.crdt.improved.ShoppingList import ShoppingList
 import json
 import src.common.readWriteLock as ReadWriteLock
 
@@ -81,7 +81,7 @@ class ShoppingListStorage:
                 
                 if row:
                     json_str = json.dumps(row[0]) 
-                    return ShopList.from_json(json_str)
+                    return ShoppingList.from_json(json_str)
                 return None
         except DataError:
             return None
@@ -100,7 +100,7 @@ class ShoppingListStorage:
                 
                 for row in rows:
                     json_str = json.dumps(row[0]) 
-                    lists.append(ShopList.from_json(json_str))
+                    lists.append(ShoppingList.from_json(json_str))
             return lists
         finally:
             conn.close()
@@ -117,7 +117,7 @@ class ShoppingListStorage:
                 
                 for row in rows:
                     json_str = json.dumps(row[0]) 
-                    lists.append(ShopList.from_json(json_str))
+                    lists.append(ShoppingList.from_json(json_str))
             return lists
         finally:
             conn.close()
@@ -134,7 +134,7 @@ class ShoppingListStorage:
                 
                 for row in rows:
                     json_str = json.dumps(row[0]) 
-                    replicas.append(ShopList.from_json(json_str))
+                    replicas.append(ShoppingList.from_json(json_str))
             return replicas
         finally:
             conn.close()

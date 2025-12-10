@@ -1,5 +1,6 @@
 import sys
-from src.common.crdt.shop_list import ShopList
+import uuid
+from src.common.crdt.improved.ShoppingList import ShoppingList 
 from src.client.storage import ShoppingListStorage
 
 class ClientInterface:
@@ -19,10 +20,16 @@ class ClientInterface:
         print("7. [q]uit                -> Exit")
 
     def create_list(self, name):
-        sl = ShopList() 
+        list_uuid = str(uuid.uuid4())
+        
+        sl = ShoppingList(list_id=self.client_id)
+
+        sl.uuid = list_uuid 
+
         self.storage.save_list(sl, name)
-        print(f"Created list '{name}' with ID: {sl.id}")
-        self.communicator.send_update(sl.id, sl.to_json())
+        print(f"Created list '{name}' with ID: {list_uuid}")
+        
+        self.communicator.send_update(sl.uuid, sl.to_json())
 
     def show_lists(self):
         rows = self.storage.get_all_lists_metadata()
@@ -31,32 +38,30 @@ class ClientInterface:
             return
         print("\n=== YOUR LISTS ===")
         for r in rows:
-            # r is (uuid, name)
             print(f"ID: {r[0]} | Name: {r[1]}")
 
     def show_list_content(self, list_id):
-        """Displays the items inside a specific list using the SQL Read-Cache."""
-        name, rows = self.storage.get_list_items_for_display(list_id)
+        """Displays the items using the CRDT's get_visible_items method."""
+        sl = self.storage.get_list_by_id(list_id)
         
-        if rows is None:
+        if not sl:
             print("Error: List not found.")
             return
 
-        print(f"\n--- CONTENT OF {name} {list_id} ---")
-        if not rows:
+        visible_items = sl.get_visible_items()
+        
+        print(f"\n--- CONTENT OF {list_id} ---")
+        if not visible_items:
             print("[Empty]")
             return
 
-        for r in rows:
-            name = r[0]
-            needed = r[1]
-            acquired = r[2]
-            
+        for name, data in visible_items.items():
+            needed = data['needed']
+            acquired = data['acquired']
             status = "[x]" if acquired >= needed else "[ ]"
             print(f" {status} {name} (Need: {needed}) | (Got: {acquired})")
 
-    def add_item(self, list_id, item_name, quantity=1):
-        """Adds an item with a specific target quantity."""
+    def add_item(self, list_id, item_name, quantity=1, acquired=0):
         sl = self.storage.get_list_by_id(list_id)
         if not sl:
             print("Error: List not found.")
@@ -66,47 +71,51 @@ class ClientInterface:
             qty_needed = int(quantity)
         except ValueError:
             qty_needed = 1
+        
+        try:
+            acquired = int(acquired)
+        except ValueError:
+            acquired = 0
 
-        sl.add_item(key=item_name.lower(), name=item_name, qty_needed=qty_needed)
+        sl.add_item(name=item_name, needed_amount=qty_needed, acquired_amount=acquired)
         
         self.storage.save_list(sl)
-        print(f"Added '{item_name}' (Need: {qty_needed})")
-        self.communicator.send_update(sl.id, sl.to_json())
+        print(f"Added '{item_name}' (Need: {qty_needed}) | (Got: {acquired}) to list.")
+        self.communicator.send_update(list_id, sl.to_json())
 
-
-    def update_item(self, list_id, item_name, needed, acquired):
-        """Updates the quantities of an existing item."""
+    def update_item(self, list_id, item_name, needed, acquired=None):
         sl = self.storage.get_list_by_id(list_id)
         if not sl:
             print("Error: List not found.")
             return
 
+        visible_items = sl.get_visible_items()
+        if item_name not in visible_items:
+            print(f"Error: Item '{item_name}' not found in list.")
+            return
+
+        current_needed = visible_items[item_name]['needed']
+        current_acquired = visible_items[item_name]['acquired']
+
         try:
-            qty_n = int(needed)
-            qty_a = int(acquired)
+            target_needed = int(needed)
+            target_acquired = int(acquired) if acquired is not None else current_acquired
         except ValueError:
             print("Error: Quantities must be numbers.")
             return
 
-        sl.update_item(key=item_name.lower(), qty_needed=qty_n, qty_acquired=qty_a)
+        diff_needed = target_needed - current_needed
+        diff_acquired = target_acquired - current_acquired
+
+        if diff_needed != 0:
+            sl.update_needed(item_name, diff_needed)
+        
+        if diff_acquired != 0:
+            sl.update_acquired(item_name, diff_acquired)
 
         self.storage.save_list(sl)
-        print(f"Updated '{item_name}' -> Need: {qty_n}, Got: {qty_a}")
-        self.communicator.send_update(sl.id, sl.to_json())
-
-    def update_item(self, list_id, item_name, **fields):
-        sl = self.storage.get_list_by_id(list_id)
-        if not sl:
-            print("Error: List not found.")
-            return
-
-        sl.update_item(key=item_name.lower(), **fields)
-
-        self.storage.save_list(sl)
-        print(f"Updated '{item_name}' with {fields}.")
-
-        self.communicator.send_update(sl.id, sl.to_json())
-
+        print(f"Updated '{item_name}' -> Need: {target_needed}, Got: {target_acquired}")
+        self.communicator.send_update(list_id, sl.to_json())
 
     def delete_item(self, list_id, item_name):
         sl = self.storage.get_list_by_id(list_id)
@@ -114,13 +123,11 @@ class ClientInterface:
             print("Error: List not found.")
             return
 
-        # CRDT Logic: This sets the tombstone (value=None)
-        sl.delete_item(key=item_name.lower())
+        sl.remove_item(item_name)
 
         self.storage.save_list(sl)
-        print(f"Deleted '{item_name}' (Tombstone set).")
-
-        self.communicator.send_update(sl.id, sl.to_json())
+        print(f"Deleted '{item_name}'.")
+        self.communicator.send_update(list_id, sl.to_json())
 
     def loop(self):
         print(f"--- Shopping List Client ({self.client_id}) ---")
@@ -148,9 +155,12 @@ class ClientInterface:
                     case 'd' if len(args) >= 2:
                         self.delete_item(list_id=args[0], item_name=args[1])
                     case 'u' if len(args) >= 4:
-                        self.update_item(list_id=args[0], item_name=args[1], qty_needed=int(args[2]), qty_acquired=int(args[3]))
+                        self.update_item(list_id=args[0], item_name=args[1], needed=args[2], acquired=args[3])
                     case 'u' if len(args) >= 3:
-                        self.update_item(list_id=args[0], item_name=args[1], qty_needed=int(args[2]))
+                        self.update_item(list_id=args[0], item_name=args[1], needed=args[2])
+                    case 'a' if len(args) >= 4:
+                        print( args)
+                        self.add_item(args[0], args[1], quantity=args[2], acquired=args[3])
                     case 'a' if len(args) >= 3:
                         self.add_item(args[0], args[1], quantity=args[2])
                     case 'a' if len(args) == 2:
