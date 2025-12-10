@@ -284,6 +284,9 @@ class ServerCommunicator:
                     
             time.sleep(10)
 
+        
+    
+
     def update_server_config(self, reachable_servers): # TODO fix this 
         print("[Network] Updating server configuration from reachable servers...")
 

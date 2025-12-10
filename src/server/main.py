@@ -38,15 +38,10 @@ def main():
     parser = argparse.ArgumentParser(description="Shopping List Server")
     parser.add_argument("--port", required=True, help="Port to run the server on")
     parser.add_argument("--db", required=True, help="DB Name (e.g. server_1)")
-    parser.add_argument("--seed", type=bool, default=False, help="Whether it is the first server to start")
-    parser.add_argument("--known_server_port", type=int, help="Port of a known server to connect to if not seeding")
+    parser.add_argument("--servers", type=str, help="file containing known servers", default=None)
     args = parser.parse_args()
 
     clean_db_name = args.db.replace(".db", "").lower().replace("-", "_")
-
-    if not args.seed and not args.known_server_port:
-        print("[Fatal] Non-seed servers must provide --known_server_port to connect to an existing server.")
-        return
     
 
     try:
@@ -66,7 +61,18 @@ def main():
     storage = ServerStorage(db_config)
     storage.initialize_schema()
 
-    comm = ServerCommunicator(storage, args.port, args.seed, args.known_server_port)
+    known_servers = []
+    if args.servers:
+        try:
+            with open(args.servers, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        known_servers.append(line)
+        except Exception as e:
+            print(f"[Warning] Could not read known servers file: {e}")
+    
+    comm = ServerCommunicator(storage, args.port, known_servers)
     comm.start()
     
 

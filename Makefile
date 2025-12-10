@@ -4,8 +4,8 @@ SRC_DIR = src
 DB_CONTAINER_NAME = shopping-db
 DB_PASSWORD = password
 DB_PORT = 5432
-LOG_DIR = $(SRC_DIR)/server/server_logs
-BASE_PORT = 5555
+SERVER_LOG_DIR = $(SRC_DIR)/server/server_logs
+PROXY_LOG_DIR = $(SRC_DIR)/proxy/proxy_logs
 
 all: help
 
@@ -40,41 +40,31 @@ client1:
 client2:
 	PYTHONPATH=$(PWD) $(PYTHON) -m src.client.main --id "User_B" --db "client_B.db"
 
-# --- RUNNING SERVERS ---
+# --- RUNNING SERVERS VIA ADMIN TOOL ---
 servers:
-	mkdir -p $(LOG_DIR)
-	@# Clean old server logs before starting
-	$(MAKE) clean-logs
-	@# Start Server_1
-	PYTHONPATH=$(PWD) $(PYTHON) -m src.server.main --id "Server_1" --seed "True" --port "5555" > $(LOG_DIR)/server1.log 2>&1 &
-	@# Start Server_2
-	PYTHONPATH=$(PWD) $(PYTHON) -m src.server.main --id "Server_2" --seed "False" --port "5556" --known_server_port "5555" > $(LOG_DIR)/server2.log 2>&1 &
-	@echo "Server_1 and Server_2 started in background. Logs in $(LOG_DIR)."
+	mkdir -p $(SERVER_LOG_DIR) $(PROXY_LOG_DIR)
+	PYTHONPATH=$(PWD) $(PYTHON) src.admin.main --action initial_setup
 
-additional_server:
-	mkdir -p $(LOG_DIR)
-	@# Count existing servers, but start from 3 if logs were cleaned
-	@LAST_NUM=$$(ls $(LOG_DIR)/server*.log 2>/dev/null | wc -l); \
-	if [ $$LAST_NUM -lt 2 ]; then \
-		NEXT_NUM=3; \
-	else \
-		NEXT_NUM=$$((LAST_NUM + 1)); \
-	fi; \
-	NEXT_PORT=$$((5554 + NEXT_NUM)); \
-	LOG_FILE="$(LOG_DIR)/server$$NEXT_NUM.log"; \
-	echo "Starting Server_$$NEXT_NUM on port $$NEXT_PORT, logging to $$LOG_FILE"; \
-	PYTHONPATH=$(PWD) $(PYTHON) -m src.server.main --id "Server_$$NEXT_NUM" --seed "False" --port "$$NEXT_PORT" --known_server_port "5555" > $$LOG_FILE 2>&1 &
+add_server:
+	mkdir -p $(SERVER_LOG_DIR)
+	PYTHONPATH=$(PWD) $(PYTHON) src.admin.main --action add_server
 
+remove_server:
+	@if [ -z "$(SERVER_NAME)" ]; then \
+		echo "ERROR: Please provide SERVER_NAME, e.g. make remove_server SERVER_NAME=Server_3"; \
+		exit 1; \
+	fi
+	PYTHONPATH=$(PWD) $(PYTHON) src.admin.main --action remove_server --server_name $(SERVER_NAME)
+
+# --- CLEANUP ---
 clean-logs:
-	rm -f $(LOG_DIR)/server*.log
+	rm -f $(SERVER_LOG_DIR)/server*.log
 	@echo "Server logs cleaned."
-
 
 stop-servers:
 	@pkill -f "python3 -m src.server.main" || true
 	@echo "All servers stopped."
 
-# --- CLEANUP ---
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	@echo "Python cache cleaned."
@@ -86,8 +76,9 @@ help:
 	@echo "  make stop-db           - Stop PostgreSQL"
 	@echo "  make client1           - Run Client A"
 	@echo "  make client2           - Run Client B"
-	@echo "  make servers           - Start Server_1 and Server_2 in background"
-	@echo "  make additional_server - Add a new server in background"
+	@echo "  make servers           - Run initial setup via admin tool"
+	@echo "  make add_server        - Add a new server via admin tool"
+	@echo "  make remove_server     - Remove a server via admin tool (use SERVER_NAME)"
 	@echo "  make clean-logs        - Remove server log files"
 	@echo "  make stop-servers      - Stop all running servers"
 	@echo "  make clean             - Remove Python cache"

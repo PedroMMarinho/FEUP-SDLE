@@ -22,11 +22,13 @@ class MessageType(Enum):
     PROXY_INTRODUCTION_ACK = 18
     HASHRING_UPDATE = 19
     HASHRING_UPDATE_ACK = 20
+    REMOVE_SERVER = 21
+    REMOVE_SERVER_ACK = 22
 
 class Message:
     def __init__(self, msg_type=None, payload=None, json_str=None):
         if json_str is not None:
-            data = json.loads(json_str)
+            data = json.loads(json_str.decode('utf-8'))
             self.msg_type = MessageType(data["msg_type"])
             self.payload = data["payload"]
         else:
