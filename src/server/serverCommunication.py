@@ -149,57 +149,59 @@ class ServerCommunicator:
             print(f"[Gossip] Informed server {server.port} of removal of server {removed_port}.")
 
     def heartbeat(self):
+
+        print("[Heartbeat] Starting heartbeat to monitor server health...")
         while self.running:
-            print("[Heartbeat] Sending heartbeat to all servers...")
-
-            heartbeat_msg = Message(
-                msg_type=MessageType.HEARTBEAT,
-                payload={"port": self.port, "hash": self.hash}
-            )
-
-            poller = pyzmq.Poller()
-
-            # 1. Send heartbeat to all servers and register sockets for poll
-            for server in self.servers:
-
-                if server.socket is None:
-                    s = self.context.socket(pyzmq.DEALER)
-                    s.connect(f"tcp://localhost:{server.port}")
-                    server.setSocket(s)
-
-                server.socket.send(heartbeat_msg.serialize())
-                poller.register(server.socket, pyzmq.POLLIN)
-
-            # 2. Poll all at once (shared timeout)
-            socks = dict(poller.poll(timeout=2000))  # 2 seconds for all
-
-            # 3. Process replies
-            for server in self.servers:
-                if server.socket in socks:
-                    reply_bytes = server.socket.recv()
-                    reply = Message(json_str=reply_bytes)
-                    print(f"[Heartbeat] ACK from {server.port}: {reply.msg_type}")
-                    server.unreachable = False
-                    
-                else:
-                    print(f"[Heartbeat] No ACK from {server.port} → UNREACHABLE")
-                    server.unreachable = True
-
-            if all(s.unreachable for s in self.servers):
-                print("[Heartbeat] All servers unreachable → disconnected")
-                self.disconnected = True
-
-            if any(not s.unreachable for s in self.servers) and self.disconnected:
-                print("[Heartbeat] Reconnected to at least one server, requesting config update")
-                self.disconnected = self.update_server_config( [s for s in self.servers if not s.unreachable] )
-
-        
-            # 4. Handle queued actions for now reachable servers
-            for server in self.servers:
-                if not server.unreachable and server.actionQueue:
-                    self.thread_pool.submit(self.handle_action_queue, server)
-                    
+            for server in self.servers: 
+                if server.actionQueue.length == 0:
+                    continue
+                self.thread_pool.submit(self.heartbeat_check_and_retry, server)
             time.sleep(10)
+
+    def heartbeat_check_and_retry(self, server):
+        if self.check_server_reachable(server):
+            print(f"[Heartbeat] {server.port} is reachable → retrying actions")
+            self.handle_action_queue(server)
+        else:
+            print(f"[Heartbeat] {server.port} still unreachable")
+
+
+    def check_server_reachable(self, server):
+        print(f"[Heartbeat] Checking reachability of server {server.port}")
+        message = Message(msg_type=MessageType.HEARTBEAT, payload={})
+        poller = pyzmq.Poller()
+        poller.register(server.socket, pyzmq.POLLIN)
+
+        retries = 3
+        timeout = 1000  # ms
+
+        for attempt in range(1, retries + 1):
+            print(f"[Heartbeat] Sending HEARTBEAT to {server.port} "
+                  f"(attempt {attempt}/{retries})")
+
+            server.socket.send(message.serialize())
+
+            socks = dict(poller.poll(timeout))
+
+            if server.socket in socks and socks[server.socket] == pyzmq.POLLIN:
+                # Received something
+                reply_bytes = server.socket.recv()
+                reply = Message(json_str=reply_bytes)
+
+                if reply.msg_type == MessageType.HEARTBEAT_ACK:
+                    print(f"[Heartbeat] HEARTBEAT_ACK received from {server.port}")
+                    return True
+
+                else:
+                    print(f"[Heartbeat] Unexpected reply ({reply.msg_type}). Retrying...")
+
+            else:
+                print(f"[Heartbeat] No HEARTBEAT_ACK from {server.port}, retrying...")
+                timeout = min(timeout * 2, 8000)
+
+        # FAILED AFTER RETRIES
+        print(f"[Heartbeat] FAILED: {server.port} didnt respond.")
+        return False
 
     
     def handle_action_queue(self, server):
