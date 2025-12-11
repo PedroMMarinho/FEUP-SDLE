@@ -22,6 +22,7 @@ def initial_setup():
 
     with open(f"{SERVER_LOG_DIR}/known_servers.txt", "w") as f:
         for i in range(1, 6):
+            f.write(f"Server_{i}:{SERVER_BASE_PORT + i - 1}\n")
             subprocess.Popen([
                 "python3", "-m", "src.server.main",
                 "--id", f"Server_{i}",
@@ -29,7 +30,7 @@ def initial_setup():
                 "--db", f"server_{i}",
                 "--servers", "known_servers.txt"
             ], stdout=open(f"{SERVER_LOG_DIR}/server{i}.log", "w"), stderr=subprocess.STDOUT)
-            f.write(f"Server_{i}:{SERVER_BASE_PORT + i - 1}\n")
+            
 
 
 
@@ -59,6 +60,11 @@ def add_server():
 
     print(f"Starting {server_name} on port {next_port}")
 
+    # store known servers in a file for later use
+    known_servers_file = f"{SERVER_LOG_DIR}/known_servers.txt"
+    with open(known_servers_file, "a") as f:
+        f.write(f"{server_name}:{next_port}\n")
+
     subprocess.Popen([
         "python3", "-m", "src.server.main",
         "--id", server_name,
@@ -68,10 +74,6 @@ def add_server():
         "--known_server_port", str(SERVER_BASE_PORT)
     ], stdout=open(logfile, "w"), stderr=subprocess.STDOUT)
 
-    # store known servers in a file for later use
-    known_servers_file = f"{SERVER_LOG_DIR}/known_servers.txt"
-    with open(known_servers_file, "a") as f:
-        f.write(f"{server_name}:{next_port}\n")
 
     print(f"{server_name} launched (matching `make additional_server`).")
 

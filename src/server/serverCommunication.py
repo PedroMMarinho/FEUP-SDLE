@@ -4,7 +4,9 @@ from common.messages.messages import Message, MessageType
 from src.common.threadPool.threadPool import ThreadPool
 from src.server.actions import ServerActions
 import time 
+import random 
 
+GOSSIP_FANOUT = 2
 
 class Server():
     def __init__(self, port, hash):
@@ -18,12 +20,11 @@ class Server():
         self.socket = socket
 
 class ServerCommunicator:
-    def __init__(self, storage, port, seed, known_server_port):
+    def __init__(self, storage, port, known_servers):
         self.storage = storage
         self.port = port
         self.hash = hashlib.sha256(f"server_{port}".encode()).hexdigest()
-        self.seed = seed
-        self.known_server_port = known_server_port
+        self.known_servers = known_servers
         self.running = True
         self.daemon = True 
         self.context = pyzmq.Context()
@@ -38,18 +39,8 @@ class ServerCommunicator:
         
         self.setup_server_interface_socket()
         print(f"[System] Starting server on port {self.port}...")
-        if self.seed:
-            print("[System] Seeding as the first server.")
-        else:
-            print(f"[System] Connecting to known server on port {self.known_server_port}...")
-
-
-            if(self.connect_to_known_server()): 
-                print("[System] Connected to known server successfully.")
-            else:
-                print("[System] Failed to connect to known server. Exiting.")
-                return
-            self.notify_other_servers()
+        self.setup_servers()
+        self.thread_pool.submit(self.gossip)
         self.thread_pool.submit(self.heartbeat)
         self.loop()
 
@@ -58,115 +49,31 @@ class ServerCommunicator:
         self.server_interface_socket.bind(f"tcp://localhost:{self.port}")
         self.poller.register(self.server_interface_socket, pyzmq.POLLIN)
 
-    def connect_to_known_server(self):
-        print(f"[Network] Connecting to server on port {self.known_server_port}...")
-        self.server_list.append(self.known_server_port)
+    def setup_servers(self):
+        print("[Network] Setting up known servers...")
+        for port, hash in self.known_servers:
+            server = Server(port, hash)
+            self.servers.append(server)
+            socket = self.context.socket(pyzmq.DEALER)
+            socket.connect(f"tcp://localhost:{port}")
+            server.setSocket(socket)
 
-        seedSocket = self.context.socket(pyzmq.DEALER)
-        seedSocket.connect(f"tcp://localhost:{self.known_server_port}")
+    def gossip(self):   
+        print("[Gossip] Starting gossip to notify other servers...")
+        while self.running:
+            random_servers = random.sample(self.servers, min(len(self.servers), GOSSIP_FANOUT))
+            for server in random_servers:
+                self.notify_server(server)
+            time.sleep(5)
 
-        seedPoller = pyzmq.Poller()
-        seedPoller.register(seedSocket, pyzmq.POLLIN)
-
-        message = Message(
-            msg_type=MessageType.SERVER_INTRODUCTION,
-            payload={"port": self.port, "hash": self.hash}
-        )
-
-        retries = 5
-        timeout = 2000  
-
-        for attempt in range(1, retries + 1):
-            print(f"[Network] Sending SERVER_INTRODUCTION attempt {attempt}/{retries}")
-            seedSocket.send(message.serialize())
-
-            socks = dict(seedPoller.poll(timeout))
-
-            if seedSocket in socks and socks[seedSocket] == pyzmq.POLLIN:
-                # SUCCESS
-                msg_bytes = seedSocket.recv()
-                response = Message(json_str=msg_bytes)
-
-                if response.msg_type == MessageType.SERVER_INTRODUCTION_ACK:
-                    hashes = response.payload["hashes"]
-                    ports = response.payload["ports"]
-                    for port, hash in zip(ports, hashes):
-                        server = Server(port, hash)
-                        self.servers.append(server)
-                    print(f"[Network] Updated server hashes: {hashes} and ports: {ports}")
-                    return True
-
-                else:
-                    print(f"[Network] Unexpected response type: {response.msg_type}")
-                    return False
-
-            # TIMEOUT → retry
-            print(f"[Network] No response, retrying in {timeout/1000:.1f}s...")
-
-            # Exponential backoff (optional)
-            timeout = min(timeout * 2, 8000)
-
-        print("[Network] Failed to connect to seed server after retries.")
-        return False
-
-
-    def notify_other_servers(self):
-        print("[Network] Notifying other servers...")
-
-        for server in self.servers:
-            self.notify_server(server)
 
     def notify_server(self, server):
-        notify_message = Message(
-            msg_type=MessageType.SERVER_INTRODUCTION,
-            payload={"port": self.port, "hash": self.hash}
+        message = Message(
+            msg_type=MessageType.GOSSIP_SERVER_LIST,
+            payload={ "ports": [s.port for s in self.servers] , "hashes": [s.hash for s in self.servers]}
         )
-
-        retries = 3
-        base_timeout = 1000  # 1 second
-        if server.port == self.port or server.port == self.known_server_port:
-            return
-
-        # Create or reuse socket
-        if server.socket is None:
-            server_socket = self.context.socket(pyzmq.DEALER)
-            server_socket.connect(f"tcp://localhost:{server.port}")
-            server.setSocket(server_socket)
-        else:
-            server_socket = server.socket
-
-        poller = pyzmq.Poller()
-        poller.register(server_socket, pyzmq.POLLIN)
-
-        timeout = base_timeout
-
-        for attempt in range(1, retries + 1):
-            print(f"[Notify] Sending intro to server {server.port} (attempt {attempt}/{retries})")
-
-            server_socket.send(notify_message.serialize())
-
-            socks = dict(poller.poll(timeout))
-
-            if server_socket in socks and socks[server_socket] == pyzmq.POLLIN:
-                # SUCCESS
-                reply_bytes = server_socket.recv()
-                reply = Message(json_str=reply_bytes)
-
-                print(f"[Notify] Server {server.port} ACK: {reply.msg_type}")
-
-                server.unreachable = False
-                break  # stop retrying this server
-
-            else:
-                print(f"[Notify] No reply from {server.port}, retrying...")
-                timeout = min(timeout * 2, 8000)
-
-        else:
-            # FAILED AFTER RETRIES
-            server.unreachable = True
-            server.actionQueue.append((ServerActions.NOTIFY, None))
-            print(f"[Notify] Server {server.port} marked UNREACHABLE.")
-
+        server.socket.send(message.serialize())
+        print(f"[Gossip] Notified server {server.port} of my presence.")
 
     def loop(self):
         print("[System] Entering main server loop...")
@@ -187,8 +94,10 @@ class ServerCommunicator:
         message = Message(json_str=msg_bytes)
         print(f"[Network] Received message from {identity}: {message.msg_type}, {message.payload}")
         match message.msg_type:
-            case MessageType.SERVER_INTRODUCTION:
-                self.thread_pool.submit(self.handle_server_introduction, identity, message.payload)
+            case MessageType.GOSSIP_SERVER_LIST:
+                self.thread_pool.submit(self.handle_gossip_server_list, identity, message.payload)
+            case MessageType.GOSSIP_SERVER_REMOVAL:
+                self.thread_pool.submit(self.handle_gossip_server_removal, identity, message.payload)
             case MessageType.HEARTBEAT:
                 self.thread_pool.submit(self.handle_heartbeat, identity, message.payload)
             case MessageType.SERVER_CONFIG_UPDATE:
@@ -202,34 +111,44 @@ class ServerCommunicator:
             case _:
                 print(f"[Network] Unknown message type: {message.msg_type}")
 
-    def handle_server_introduction(self, identity, payload):
-        print(f"[Network] Handling SERVER_INTRODUCTION from {identity}: {payload}")
+    def handle_gossip_server_list(self, identity, payload):
 
-        identity, msg_bytes = self.server_interface_socket.recv_multipart()
-        message = Message(json_str=msg_bytes)
-        print(f"[Network] Received message from {identity}: {message.msg_type}, {message.payload}")
-        new_port = message.payload["port"]
-        new_hash = message.payload["hash"]
+        print(f"[Network] Handling GOSSIP_SERVER_LIST from {identity}: {payload}")
+        ports = payload["ports"]
+        hashes = payload["hashes"]
 
+        
+        new_servers = []
+        for port, hash in zip(ports, hashes):
+            if port not in [s.port for s in self.servers] and port != self.port:
+                print(f"[Network] Discovered new server from gossip: {port}")
+                new_server = Server(port, hash)
+                self.servers.append(new_server)
+                new_socket = self.context.socket(pyzmq.DEALER)
+                new_socket.connect(f"tcp://localhost:{port}")
+                new_server.setSocket(new_socket)
+                new_servers.append(new_server)
 
-        if self.seed:
-            ack_message = Message(msg_type=MessageType.SERVER_INTRODUCTION_ACK, payload={"ports": [s.port for s in self.servers], "hashes": [s.hash for s in self.servers]})
-            self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
-            print(f"[Network] Sent SERVER_INTRODUCTION_ACK to new server on port {new_port}")
-        else:
-            ack_message = Message(msg_type=MessageType.SERVER_INTRODUCTION_ACK, payload={})
-            self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
-            print(f"[Network] Sent SERVER_INTRODUCTION_ACK to new server on port {new_port}")
-        print(f"[Network] Added new server: port {new_port}, hash {new_hash}")
-
-        back,forward = self.get_hashring_neighbors() # TODO incorrect logic here - new servers need to asked to send load balance instead
-        if back and back.port == new_port:
-            print(f"[Network] New server {new_port} is my back neighbor. Sending lists.")
+        for new_server in new_servers:
+            back, forward = self.get_hashring_neighbors()  # TODO incorrect logic here - new servers need to asked to send load balance instead
+            if back and back.port == new_server.port:
+                print(f"[Network] New server {new_server.port} is my back neighbor. Sending lists.")
             self.thread_pool.submit(self.load_balance_back, new_server)
 
-        if forward and forward.port == new_port:
-            print(f"[Network] New server {new_port} is my forward neighbor. Sending lists.")
+        if forward and forward.port == new_server.port:
+            print(f"[Network] New server {new_server.port} is my forward neighbor. Sending lists.")
             self.thread_pool.submit(self.load_balance_forward, new_server)
+
+    def handle_gossip_server_removal(self, identity, payload):
+        print(f"[Network] Handling GOSSIP_SERVER_REMOVAL from {identity}: {payload}")
+        removed_port = payload["port"]
+        self.servers = [s for s in self.servers if s.port != removed_port]
+        print(f"[Network] Removed server {removed_port} from known servers.")
+
+        message = Message(msg_type=MessageType.GOSSIP_SERVER_REMOVAL, payload={"port": removed_port})
+        for server in random.sample(self.servers, min(len(self.servers), GOSSIP_FANOUT)):
+            server.socket.send(message.serialize())
+            print(f"[Gossip] Informed server {server.port} of removal of server {removed_port}.")
 
     def heartbeat(self):
         while self.running:

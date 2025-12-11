@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from src.server.serverCommunication import ServerCommunicator
@@ -68,9 +69,15 @@ def main():
                 for line in f:
                     line = line.strip()
                     if line:
-                        known_servers.append(line)
+                        name, port_str = line.split(":")
+                        known_servers.append((port_str, hashlib.sha256(f"server_{port_str}".encode()).hexdigest()))
         except Exception as e:
             print(f"[Warning] Could not read known servers file: {e}")
+
+
+
+    for name, port in known_servers:
+        print(f"[System] Known server: {name} at port {port}")
     
     comm = ServerCommunicator(storage, args.port, known_servers)
     comm.start()
