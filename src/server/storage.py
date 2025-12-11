@@ -50,17 +50,14 @@ class ShoppingListStorage:
 
         for name, item_data in data.get('items', {}).items():
 
-            # reconstruct needed PNCounter
             needed = PNCounter()
             needed.positive.counts = item_data["needed"]["positive"]["counts"]
             needed.negative.counts = item_data["needed"]["negative"]["counts"]
 
-            # reconstruct acquired PNCounter
             acquired = PNCounter()
             acquired.positive.counts = item_data["acquired"]["positive"]["counts"]
             acquired.negative.counts = item_data["acquired"]["negative"]["counts"]
 
-            # reconstruct OR-Set
             existence = ORSet()
             existence.elements = {tuple(x) for x in item_data["existence"]["elements"]}
             existence.tombstones = {tuple(x) for x in item_data["existence"]["tombstones"]}
@@ -73,16 +70,19 @@ class ShoppingListStorage:
 
         return sl
 
-    def save_list(self, shop_list, name=None, is_replica=False, intended_server_hash=None):
+    def save_list(self, shop_list, name=None, is_replica=False):
+        """
+        Removed intended_server_hash, since not present in SQL schema.
+        """
         self.lock.acquire_write()
         conn = self._get_conn()
 
         try:
             with conn:
                 with conn.cursor() as cursor:
+
                     list_uuid = getattr(shop_list, "uuid", shop_list.id)
 
-                    # Load existing CRDT
                     cursor.execute(
                         "SELECT crdt, name FROM ShoppingList WHERE uuid=%s FOR UPDATE",
                         (list_uuid,)
@@ -98,42 +98,38 @@ class ShoppingListStorage:
                         if isinstance(db_crdt_json, str):
                             db_crdt_json = json.loads(db_crdt_json)
 
-                        # Reconstruct server CRDT
                         db_list = self._reconstruct_crdt(db_crdt_json)
 
-                        # Merge like client
                         shop_list.merge(db_list)
 
                     if name is None:
                         name = "Unnamed List"
 
-                    # convert final merged crdt to dict
                     crdt_blob = json.dumps(self._crdt_to_dict(shop_list))
 
-                    # Save merged version with server-only fields
                     cursor.execute(
                         """
-                        INSERT INTO ShoppingList (uuid, name, crdt, logical_clock, isReplica, intended_server_hash)
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                        INSERT INTO ShoppingList (uuid, name, crdt, logical_clock, isReplica)
+                        VALUES (%s, %s, %s, %s, %s)
                         ON CONFLICT(uuid) DO UPDATE SET
                             crdt = excluded.crdt,
                             name = excluded.name,
                             logical_clock = excluded.logical_clock,
-                            isReplica = excluded.isReplica,
-                            intended_server_hash = excluded.intended_server_hash
+                            isReplica = excluded.isReplica
                         """,
                         (
                             list_uuid,
                             name,
                             crdt_blob,
                             shop_list.clock,
-                            is_replica,
-                            intended_server_hash
+                            is_replica
                         )
                     )
 
-                    # Rebuild materialized items exactly like client
-                    cursor.execute("DELETE FROM ShoppingListItem WHERE shopping_list_uuid=%s", (list_uuid,))
+                    cursor.execute(
+                        "DELETE FROM ShoppingListItem WHERE shopping_list_uuid=%s",
+                        (list_uuid,)
+                    )
 
                     visible_items = shop_list.get_visible_items()
                     items_to_insert = []
@@ -149,7 +145,8 @@ class ShoppingListStorage:
                     if items_to_insert:
                         cursor.executemany(
                             """
-                            INSERT INTO ShoppingListItem (shopping_list_uuid, name, quantityNeeded, quantityAcquired, position)
+                            INSERT INTO ShoppingListItem (shopping_list_uuid, name,
+                                                          quantityNeeded, quantityAcquired, position)
                             VALUES (%s, %s, %s, %s, %s)
                             """,
                             items_to_insert
@@ -159,49 +156,46 @@ class ShoppingListStorage:
             conn.close()
             self.lock.release_write()
 
+    def _row_to_shopping_list(self, row):
+        """Convert SQL row → ShoppingList object with metadata."""
+        uuid, name, crdt_json, logical_clock, is_replica = row
+
+        if isinstance(crdt_json, str):
+            crdt_json = json.loads(crdt_json)
+
+        sl = self._reconstruct_crdt(crdt_json)
+
+        # apply server metadata
+        sl.uuid = uuid
+        sl.name = name
+        sl.clock = logical_clock
+        sl.isReplica = is_replica
+
+        return sl
+
+
     def get_list_by_id(self, list_id):
         self.lock.acquire_read()
         conn = self._get_conn()
 
         try:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT crdt FROM ShoppingList WHERE uuid=%s", (list_id,))
+                cursor.execute("""
+                    SELECT uuid, name, crdt, logical_clock, isReplica
+                    FROM ShoppingList
+                    WHERE uuid=%s
+                """, (list_id,))
                 row = cursor.fetchone()
 
                 if not row:
                     return None
 
-                crdt_data = row[0]
-                if isinstance(crdt_data, str):
-                    crdt_data = json.loads(crdt_data)
-
-                return self._reconstruct_crdt(crdt_data)
+                return self._row_to_shopping_list(row)
 
         finally:
             conn.close()
             self.lock.release_read()
 
-    def get_all_temporarily_stored_lists(self):
-        self.lock.acquire_read()
-        conn = self._get_conn()
-        lists = []
-
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT crdt FROM ShoppingList WHERE intended_server_hash IS NOT NULL")
-                rows = cursor.fetchall()
-
-                for row in rows:
-                    crdt_data = row[0]
-                    if isinstance(crdt_data, str):
-                        crdt_data = json.loads(crdt_data)
-                    lists.append(self._reconstruct_crdt(crdt_data))
-
-            return lists
-
-        finally:
-            conn.close()
-            self.lock.release_read()
 
     def get_all_non_replica_lists(self):
         self.lock.acquire_read()
@@ -210,20 +204,22 @@ class ShoppingListStorage:
 
         try:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT crdt FROM ShoppingList WHERE isReplica=FALSE")
+                cursor.execute("""
+                    SELECT uuid, name, crdt, logical_clock, isReplica
+                    FROM ShoppingList
+                    WHERE isReplica=FALSE
+                """)
                 rows = cursor.fetchall()
 
                 for row in rows:
-                    crdt_data = row[0]
-                    if isinstance(crdt_data, str):
-                        crdt_data = json.loads(crdt_data)
-                    lists.append(self._reconstruct_crdt(crdt_data))
+                    lists.append(self._row_to_shopping_list(row))
 
             return lists
 
         finally:
             conn.close()
             self.lock.release_read()
+
 
     def get_all_replicas(self):
         self.lock.acquire_read()
@@ -232,14 +228,15 @@ class ShoppingListStorage:
 
         try:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT crdt FROM ShoppingList WHERE isReplica=TRUE")
+                cursor.execute("""
+                    SELECT uuid, name, crdt, logical_clock, isReplica
+                    FROM ShoppingList
+                    WHERE isReplica=TRUE
+                """)
                 rows = cursor.fetchall()
 
                 for row in rows:
-                    crdt_data = row[0]
-                    if isinstance(crdt_data, str):
-                        crdt_data = json.loads(crdt_data)
-                    lists.append(self._reconstruct_crdt(crdt_data))
+                    lists.append(self._row_to_shopping_list(row))
 
             return lists
 
@@ -247,13 +244,45 @@ class ShoppingListStorage:
             conn.close()
             self.lock.release_read()
 
-    def delete_list_by_id(self, list_id):
+
+    def get_all_lists(self):
+        self.lock.acquire_read()
+        conn = self._get_conn()
+        lists = []
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT uuid, name, crdt, logical_clock, isReplica
+                    FROM ShoppingList
+                """)
+                rows = cursor.fetchall()
+
+                for row in rows:
+                    lists.append(self._row_to_shopping_list(row))
+
+            return lists
+
+        finally:
+            conn.close()
+            self.lock.release_read()
+
+    def delete_list(self, list_id):
         self.lock.acquire_write()
         conn = self._get_conn()
 
         try:
-            with conn.cursor() as cursor:
-                cursor.execute("DELETE FROM ShoppingList WHERE uuid=%s", (list_id,))
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "DELETE FROM ShoppingList WHERE uuid=%s",
+                        (list_id,)
+                    )
+                    cursor.execute(
+                        "DELETE FROM ShoppingListItem WHERE shopping_list_uuid=%s",
+                        (list_id,)
+                    )
+
         finally:
             conn.close()
             self.lock.release_write()

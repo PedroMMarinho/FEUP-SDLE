@@ -1,16 +1,9 @@
-CREATE TABLE IF NOT EXISTS Server {
-    port INTEGER PRIMARY KEY,
-    server_hash TEXT NOT NULL
-}
-
-
 
 CREATE TABLE IF NOT EXISTS ShoppingList (
     uuid UUID PRIMARY KEY,      
     name TEXT NOT NULL,
     crdt JSONB NOT NULL,
     logical_clock INTEGER DEFAULT 0,
-    intended_server_hash TEXT, -- var to store the hash of the server intended to own this list, for cases where the server which should have received it is down
     isReplica BOOLEAN NOT NULL, -- whether this is a replica of a list from another server
 );
 
