@@ -100,8 +100,6 @@ class ServerCommunicator:
                 self.thread_pool.submit(self.handle_gossip_server_removal, identity, message.payload)
             case MessageType.HEARTBEAT:
                 self.thread_pool.submit(self.handle_heartbeat, identity, message.payload)
-            case MessageType.SERVER_CONFIG_UPDATE:
-                self.thread_pool.submit(self.handle_server_config_update, identity, message.payload)
             case MessageType.REQUEST_FULL_LIST:
                 self.thread_pool.submit(self.handle_request_full_list, identity, message.payload)
             case MessageType.REPLICA:
@@ -203,64 +201,6 @@ class ServerCommunicator:
                     
             time.sleep(10)
 
-        
-    
-
-    def update_server_config(self, reachable_servers): # TODO fix this 
-        print("[Network] Updating server configuration from reachable servers...")
-
-        update_msg = Message(
-            msg_type=MessageType.SERVER_CONFIG_UPDATE,
-            payload={"port": self.port, "hash": self.hash}
-        )
-
-        poller = self.context.socket(pyzmq.Poller)
-        
-        updated = False
-
-        for server in reachable_servers:
-
-            s = server.socket
-            if s is None:
-                s = self.context.socket(pyzmq.DEALER)
-                s.connect(f"tcp://localhost:{server.port}")
-                server.setSocket(s)
-
-            # Send update request
-            print(f"[Network] Requesting config update from {server.port}")
-            s.send(update_msg.serialize())
-
-            # Poll for response
-            poller = pyzmq.Poller()
-            poller.register(s, pyzmq.POLLIN)
-
-            socks = dict(poller.poll(timeout=2000))
-            if s not in socks:
-                print(f"[Network] No CONFIG_UPDATE_ACK from {server.port}.")
-                continue
-
-            # Receive ACK
-            reply_bytes = s.recv()
-            reply = Message(json_str=reply_bytes)
-
-            if reply.msg_type != MessageType.SERVER_CONFIG_UPDATE_ACK:
-                print(f"[Network] Wrong reply type from {server.port}: {reply.msg_type}")
-                continue
-
-            print(f"[Network] Received CONFIG_UPDATE_ACK from {server.port}")
-
-            ports = reply.payload["ports"]
-            hashes = reply.payload["hashes"]
-
-            for p, h in zip(ports, hashes):
-                if not any(srv.port == p for srv in self.servers):
-                    print(f"[Network] Added new server from update: {p}")
-                    new_server = Server(p, h)
-                    self.servers.append(new_server)
-
-            updated = True
-
-        return not updated  # return new disconnected state
     
     def handle_action_queue(self, server):
         print(f"[Network] Handling action queue for server {server.port}")
@@ -269,9 +209,6 @@ class ServerCommunicator:
             action_type, payload = server.actionQueue[0]   # FIFO
 
             match action_type:
-                case ServerActions.NOTIFY:
-                    result = self.notify_server(server)
-
                 case ServerActions.SEND_HINTED_HANDOFF:
                     result = self.send_hinted_handoff(server, payload)
 
@@ -292,20 +229,6 @@ class ServerCommunicator:
             # If success → remove from queue
             server.actionQueue.pop(0)
 
-
-    def handle_server_config_update(self, identity, payload):
-        print(f"[Network] Handling SERVER_CONFIG_UPDATE from {identity}: {payload}")
-
-        ports = [s.port for s in self.servers]
-        hashes = [s.hash for s in self.servers]
-
-        ack_message = Message(
-            msg_type=MessageType.SERVER_CONFIG_UPDATE_ACK,
-            payload={"ports": ports, "hashes": hashes}
-        )
-
-        self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
-        print(f"[Network] Sent SERVER_CONFIG_UPDATE_ACK to {identity}")
 
     def handle_heartbeat(self, identity, payload):
         print(f"[Network] Handling HEARTBEAT from {identity}: {payload}")
