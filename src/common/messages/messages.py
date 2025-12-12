@@ -7,7 +7,6 @@ class MessageType(Enum):
     REQUEST_FULL_LIST_NACK = 3
     SENT_FULL_LIST = 4
     SENT_FULL_LIST_ACK = 5
-    GOSSIP_SERVER_LIST = 6
     GOSSIP_SERVER_REMOVAL = 7
     HINTED_HANDOFF = 8
     HINTED_HANDOFF_ACK = 9
@@ -19,6 +18,7 @@ class MessageType(Enum):
     HASHRING_UPDATE_ACK = 15
     REMOVE_SERVER = 16
     REMOVE_SERVER_ACK = 17
+    GOSSIP = 18
 
 class Message:
     def __init__(self, msg_type=None, payload=None, json_str=None):

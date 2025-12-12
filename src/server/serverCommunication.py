@@ -17,18 +17,29 @@ class Server():
     def setSocket(self, socket):
         self.socket = socket
 
+class Proxy():
+    def __init__(self, port):
+        self.port = port
+        self.socket = None
+
+    def setSocket(self, socket):
+        self.socket = socket
+
+
 class ServerCommunicator:
-    def __init__(self, storage, port, known_servers):
+    def __init__(self, storage, port, known_servers, known_proxies):
         self.storage = storage
         self.port = port
         self.hash = hashlib.sha256(f"server_{port}".encode()).hexdigest()
         self.known_servers = known_servers
+        self.known_proxies = known_proxies
         self.running = True
         self.daemon = True 
         self.context = pyzmq.Context()
         self.poller = pyzmq.Poller()
         self.server_interface_socket = None
         self.servers = []
+        self.proxies = []
         self.thread_pool = ThreadPool(8)
         self.disconnected = False
 
@@ -38,7 +49,7 @@ class ServerCommunicator:
         self.setup_server_interface_socket()
         print(f"[System] Starting server on port {self.port}...")
         self.setup_servers()
-        self.thread_pool.submit(self.gossip)
+        self.thread_pool.submit(self.gossip_loop)
         self.thread_pool.submit(self.heartbeat)
         self.loop()
 
@@ -56,13 +67,42 @@ class ServerCommunicator:
             socket.connect(f"tcp://localhost:{port}")
             server.setSocket(socket)
 
-    def gossip(self):   
-        print("[Gossip] Starting gossip to notify other servers...")
+
+    def gossip_loop(self):
+        print("[Gossip] Starting gossip loop...")
         while self.running:
-            random_servers = random.sample(self.servers, min(len(self.servers), GOSSIP_FANOUT))
-            for server in random_servers:
-                self.notify_server(server)
-            time.sleep(5)
+            try:
+                self.gossip()
+                time.sleep(5)
+            except Exception as e:
+                print(f"[Gossip] Error in loop: {e}")
+
+    def gossip(self):   
+        server_ports = [str(s.port) for s in self.servers]
+        server_ports.append(str(self.port))
+        
+        proxy_ports = [str(p.port) for p in self.proxies]
+
+        payload = {
+            "servers": list(set(server_ports)),
+            "proxies": list(set(proxy_ports))
+        }
+
+        message = Message(MessageType.GOSSIP, payload)
+        serialized_msg = message.serialize()
+
+        targets = []
+        if self.servers:
+            targets.extend(random.sample(self.servers, min(len(self.servers), GOSSIP_FANOUT)))
+        if self.proxies:
+            targets.extend(random.sample(self.proxies, min(len(self.proxies), GOSSIP_FANOUT)))
+
+        for node in targets:
+            try:
+                if node.socket:
+                    node.socket.send(serialized_msg)
+            except Exception as e:
+                print(f"[Gossip] Failed to send to {node.port}: {e}")
 
 
     def notify_server(self, server):
@@ -92,8 +132,8 @@ class ServerCommunicator:
         message = Message(json_str=msg_bytes)
         print(f"[Network] Received message from {identity}: {message.msg_type}, {message.payload}")
         match message.msg_type:
-            case MessageType.GOSSIP_SERVER_LIST:
-                self.thread_pool.submit(self.handle_gossip_server_list, identity, message.payload)
+            case MessageType.GOSSIP:
+                self.thread_pool.submit(self.handle_gossip, identity, message.payload)
             case MessageType.GOSSIP_SERVER_REMOVAL:
                 self.thread_pool.submit(self.handle_gossip_server_removal, identity, message.payload)
             case MessageType.REQUEST_FULL_LIST:
@@ -107,23 +147,57 @@ class ServerCommunicator:
             case _:
                 print(f"[Network] Unknown message type: {message.msg_type}")
 
-    def handle_gossip_server_list(self, identity, payload):
 
-        print(f"[Network] Handling GOSSIP_SERVER_LIST from {identity}: {payload}")
-        ports = payload["ports"]
-        hashes = payload["hashes"]
-
+    def connect_to_server(self, port, hash_val=None):
+        if any(str(s.port) == str(port) for s in self.servers):
+            return
         
-        new_servers = []
-        for port, hash in zip(ports, hashes):
-            if port not in [s.port for s in self.servers] and port != self.port:
-                print(f"[Network] Discovered new server from gossip: {port}")
-                new_server = Server(port, hash)
-                self.servers.append(new_server)
-                new_socket = self.context.socket(pyzmq.DEALER)
-                new_socket.connect(f"tcp://localhost:{port}")
-                new_server.setSocket(new_socket)
-                new_servers.append(new_server)
+        if hash_val is None:
+            hash_val = hashlib.sha256(f"server_{port}".encode()).hexdigest()
+
+        server = Server(port, hash_val)
+        try:
+            sock = self.context.socket(pyzmq.DEALER)
+            sock.connect(f"tcp://localhost:{port}")
+            server.setSocket(sock)
+            self.servers.append(server)
+        except Exception as e:
+            print(f"[Error] Failed to connect to server {port}: {e}")
+
+    def connect_to_proxy(self, port):
+        if any(str(p.port) == str(port) for p in self.proxies):
+            return
+
+        proxy = Proxy(port)
+        try:
+            sock = self.context.socket(pyzmq.DEALER)
+            sock.connect(f"tcp://localhost:{port}")
+            proxy.setSocket(sock)
+            self.proxies.append(proxy)
+        except Exception as e:
+            print(f"[Error] Failed to connect to proxy {port}: {e}")
+
+
+    def handle_gossip(self, identity, payload):
+        incoming_servers = payload.get("servers", [])
+        incoming_proxies = payload.get("proxies", [])
+
+        # Process Servers
+        my_server_ports = {str(s.port) for s in self.servers}
+        my_server_ports.add(str(self.port))
+
+        for p in incoming_servers:
+            if str(p) not in my_server_ports:
+                print(f"[Gossip] Discovered new Server: {p}")
+                self.connect_to_server(int(p))
+
+        # Process Proxies
+        my_proxy_ports = {str(p.port) for p in self.proxies}
+
+        for p in incoming_proxies:
+            if str(p) not in my_proxy_ports:
+                print(f"[Gossip] Discovered new Proxy: {p}")
+                self.connect_to_proxy(int(p))
 
 
     def handle_gossip_server_removal(self, identity, payload):
@@ -267,7 +341,7 @@ class ServerCommunicator:
         while successes < REPLICA_COUNT and attempted < ring_len:
             server = ring[index]
 
-            ok = self._try_send_replica_to_server(server, replica_list)
+            ok = self._try_send_replica_to_server(server, shop_list)
             results.append((server, ok))
 
             if ok:

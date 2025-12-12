@@ -1,24 +1,53 @@
 import argparse
+from fileinput import filename
+import hashlib
 from src.proxy.proxyCommunication import ProxyCommunicator
 
 
 def main():
     parser = argparse.ArgumentParser(description="Shopping List Server")
     parser.add_argument("--port", required=True, help="Port to run the server on")
-    parser.add_argument("--seed", type=bool, default=False, help="Whether it is the first proxy to start")
-    parser.add_argument("--known_server_port", type=int,required=False,help="Port of a known server to connect to ")
-    parser.add_argument("--known_proxy_port", required=False, help="Port for the proxy to connect if not seeding")
+    parser.add_argument("--servers", type=str, help="file containing known servers", default=None)
+    parser.add_argument("--proxies", type=str, help="file containing known proxies", default=None)
     args = parser.parse_args()
 
-    if args.seed and not args.known_server_port:
-        print("[Fatal] Seed proxies must provide --known_server_port to connect to an existing server.")
-        return
+    filenameServer = args.servers
+    filenameProxy = args.proxies
 
-    if not args.seed and not args.known_proxy_port:
-        print("[Fatal] Non-seed proxies must provide --known_proxy_port to connect to an existing proxy.")
-        return
+    known_server_ports = []
+    known_proxy_ports = []
+ 
+    if filenameServer:
+        try:
+            with open(filenameServer, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        name, port_str = line.split(":")
+                        known_server_ports.append((port_str, hashlib.sha256(f"server_{port_str}".encode()).hexdigest()))
+        except Exception as e:
+            print(f"[Warning] Could not read known servers/proxies file: {e}")
 
-    comm = ProxyCommunicator(args.port, args.seed, args.known_server_port, args.known_proxy_port)
+
+    for name, port in known_server_ports:
+        print(f"[System] Known server: {name} at port {port}")
+
+    if filenameProxy:
+        try:
+            with open(filenameProxy, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        name, port_str = line.split(":")
+                        known_proxy_ports.append((port_str, hashlib.sha256(f"proxy_{port_str}".encode()).hexdigest()))
+        except Exception as e:
+            print(f"[Warning] Could not read known servers/proxies file: {e}")
+
+    for name, port in known_proxy_ports:
+        print(f"[System] Known proxy: {name} at port {port}")
+
+
+    comm = ProxyCommunicator(args.port, args.seed, known_server_ports, known_proxy_ports) 
     comm.start()
 
 

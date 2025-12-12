@@ -40,6 +40,7 @@ def main():
     parser.add_argument("--port", required=True, help="Port to run the server on")
     parser.add_argument("--db", required=True, help="DB Name (e.g. server_1)")
     parser.add_argument("--servers", type=str, help="file containing known servers", default=None)
+    parser.add_argument("--proxies", type=str, help="file containing known proxies", default=None)
     args = parser.parse_args()
 
     clean_db_name = args.db.replace(".db", "").lower().replace("-", "_")
@@ -75,11 +76,22 @@ def main():
             print(f"[Warning] Could not read known servers file: {e}")
 
 
-
     for name, port in known_servers:
         print(f"[System] Known server: {name} at port {port}")
+
+    known_proxies = []
+    if args.proxies:
+        try:
+            with open(args.proxies, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        name, port_str = line.split(":")
+                        known_proxies.append((port_str, hashlib.sha256(f"proxy_{port_str}".encode()).hexdigest()))
+        except Exception as e:
+            print(f"[Warning] Could not read known proxies file: {e}")
     
-    comm = ServerCommunicator(storage, args.port, known_servers)
+    comm = ServerCommunicator(storage, args.port, known_servers, known_proxies)
     comm.start()
     
 

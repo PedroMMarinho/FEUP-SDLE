@@ -2,14 +2,16 @@ import pyzmq
 from src.common.threadPool.threadPool import ThreadPool
 from src.common.messages.messages import Message, MessageType
 import hashlib
+import random
+import time
+
+GOSSIP_FANOUT = 2
 
 class Server():
     def __init__(self, port, hash):
         self.hash = hash
         self.port = port
         self.socket = None
-        self.unreachable = False
-        self.actionQueue = []
 
     def setSocket(self, socket):
         self.socket = socket
@@ -18,20 +20,22 @@ class Proxy():
     def __init__(self, port):
         self.port = port
         self.socket = None
-        self.unreachable = False
-        self.actionQueue = []
 
     def setSocket(self, socket):
         self.socket = socket
 
 class ProxyCommunicator:
-    def __init__(self, port, is_seed, known_server_port, known_proxy_port):
+    def __init__(self, port, known_server_ports, known_proxy_ports):
         self.port = port
-        self.is_seed = is_seed
-        self.known_server_port = known_server_port
-        self.known_proxy_port = known_proxy_port
+        
+        self.known_server_ports = known_server_ports
+        self.known_proxy_ports = known_proxy_ports
+
         self.context = pyzmq.Context()
+        self.poller = pyzmq.Poller()
         self.thread_pool = ThreadPool(num_threads=4)
+        self.running = True
+
         self.proxy_interface_socket = None  
         self.proxies = []
         self.servers = []
@@ -39,14 +43,55 @@ class ProxyCommunicator:
     def start(self):
         print(f"[ProxyCommunicator] Starting proxy on port {self.port}")
         self.setup_proxy_interface_socket()
-        if self.is_seed:
-            print("[ProxyCommunicator] Running as seed proxy. Trying to connect to known server...")
-            self.connect_to_known_server()
 
-        else:
-            print(f"[ProxyCommunicator] Connecting to known proxy on port {self.known_proxy_port}.")
-            self.connect_to_known_proxy()
+        self.thread_pool.submit(self.gossip_loop)
+
         self.loop()
+
+    def gossip_loop(self):
+        print("[Gossip] Loop started.")
+        while self.running:
+            try:
+                # (Peer Discovery) + (Registration)
+                self.gossip()
+                                
+                time.sleep(5) 
+            except Exception as e:
+                print(f"[Gossip] Error in loop: {e}")
+
+    def gossip(self):
+        
+        current_proxy_ports = [str(p.port) for p in self.proxies]
+        current_proxy_ports.append(str(self.port))
+        current_proxy_ports = list(set(current_proxy_ports))
+
+        current_server_ports = [str(s.port) for s in self.servers]
+        current_server_ports = list(set(current_server_ports))
+
+        payload = {
+            "proxies": current_proxy_ports,
+            "servers": current_server_ports
+        }
+        
+        message = Message(msg_type=MessageType.GOSSIP, payload=payload)
+        serialized_msg = message.serialize()
+
+        targets = []
+        
+        if self.proxies:
+            targets.extend(random.sample(self.proxies, min(len(self.proxies), GOSSIP_FANOUT)))
+        if self.servers:
+            targets.extend(random.sample(self.servers, min(len(self.servers), GOSSIP_FANOUT)))
+        
+        if not targets:
+            return
+
+        for node in targets:
+            try:
+                if node.socket:
+                    node.socket.send(serialized_msg)
+            except Exception as e:
+                print(f"[Gossip] Failed to send to {node.port}: {e}")
 
     def setup_proxy_interface_socket(self):
         self.proxy_interface_socket = self.context.socket(pyzmq.ROUTER)

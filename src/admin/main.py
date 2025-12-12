@@ -11,7 +11,7 @@ PROXY_BASE_PORT = 6000
 SERVER_LOG_DIR = "src/server/server_logs"
 PROXY_LOG_DIR = "src/proxy/proxy_logs"
 
-
+# TODO Should this create the files or do we need to create them manually?
 def initial_setup():
     """
     Matches: make servers
@@ -32,11 +32,20 @@ def initial_setup():
             ], stdout=open(f"{SERVER_LOG_DIR}/server{i}.log", "w"), stderr=subprocess.STDOUT)
             
 
-
-
     print("Initial 5 servers started (matching `make servers`).")
 
-   # TODO add proxies later 
+    with open(f"{PROXY_LOG_DIR}/known_proxies.txt", "w") as f:
+        for i in range(1, 3):
+            f.write(f"Proxy_{i}:{PROXY_BASE_PORT + i - 1}\n")
+            subprocess.Popen([
+                "python3", "-m", "src.proxy.main",
+                "--id", f"Proxy_{i}",
+                "--port", str(PROXY_BASE_PORT + i - 1),
+                "--db", f"proxy_{i}",
+                "--proxies", "known_proxies.txt"
+            ], stdout=open(f"{PROXY_LOG_DIR}/proxy{i}.log", "w"), stderr=subprocess.STDOUT)
+
+    print("Initial 2 proxies started (matching `make proxies`).")
 
 
 def add_server():
