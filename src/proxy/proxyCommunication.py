@@ -6,6 +6,7 @@ import random
 import time
 
 GOSSIP_FANOUT = 2
+GOSSIP_INTERVAL = 0.5
 
 class Server():
     def __init__(self, port, hash):
@@ -55,8 +56,8 @@ class ProxyCommunicator:
             try:
                 # (Peer Discovery) + (Registration)
                 self.gossip()
-                                
-                time.sleep(5) 
+
+                time.sleep(GOSSIP_INTERVAL)
             except Exception as e:
                 print(f"[Gossip] Error in loop: {e}")
 
@@ -158,9 +159,37 @@ class ProxyCommunicator:
                     print(f"[Gossip] Discovered new Proxy: {p}")
                     self.connect_to_proxy(int(p))
 
+        def remove_server(self, port):
+        for s in list(self.servers):  # copy to avoid mutation issues
+            if str(s.port) == str(port):
+                try:
+                    if hasattr(s, "socket") and s.socket is not None:
+                        s.socket.close(linger=0)
+                except Exception as e:
+                    print(f"[Warning] Failed closing server socket {port}: {e}")
+
+                self.servers.remove(s)
+                print(f"[Gossip] Server {port} removed")
+                return
+            
+    def remove_proxy(self, port):
+        for p in list(self.proxies):
+            if str(p.port) == str(port):
+                try:
+                    if hasattr(p, "socket") and p.socket is not None:
+                        p.socket.close(linger=0)
+                except Exception as e:
+                    print(f"[Warning] Failed closing proxy socket {port}: {e}")
+
+                self.proxies.remove(p)
+                print(f"[Gossip] Proxy {port} removed")
+                return
+
+
+
     def setup_proxy_interface_socket(self):
         self.proxy_interface_socket = self.context.socket(pyzmq.ROUTER)
-        self.proxy_interface_socket.bind(f"tcp://*:{self.port}")
+        self.proxy_interface_socket.bind(f"tcp://localhost:{self.port}")
         print(f"[ProxyCommunicator] Proxy interface socket bound to port {self.port}")
 
     def loop(self):
