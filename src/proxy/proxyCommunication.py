@@ -159,7 +159,7 @@ class ProxyCommunicator:
                     print(f"[Gossip] Discovered new Proxy: {p}")
                     self.connect_to_proxy(int(p))
 
-        def remove_server(self, port):
+    def remove_server(self, port):
         for s in list(self.servers):  # copy to avoid mutation issues
             if str(s.port) == str(port):
                 try:
