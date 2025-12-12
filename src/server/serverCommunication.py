@@ -7,6 +7,7 @@ import random
 
 GOSSIP_FANOUT = 2
 REPLICA_COUNT = 3
+GOSSIP_INTERVAL = 0.5
 
 class Server():
     def __init__(self, port, hash):
@@ -42,6 +43,7 @@ class ServerCommunicator:
         self.proxies = []
         self.thread_pool = ThreadPool(8)
         self.disconnected = False
+        self.hash_ring_version = 1
 
 
     def start(self): 
@@ -73,7 +75,7 @@ class ServerCommunicator:
         while self.running:
             try:
                 self.gossip()
-                time.sleep(5)
+                time.sleep(GOSSIP_INTERVAL)
             except Exception as e:
                 print(f"[Gossip] Error in loop: {e}")
 
@@ -85,7 +87,8 @@ class ServerCommunicator:
 
         payload = {
             "servers": list(set(server_ports)),
-            "proxies": list(set(proxy_ports))
+            "proxies": list(set(proxy_ports)),
+            "hash_ring_version": self.hash_ring_version
         }
 
         message = Message(MessageType.GOSSIP, payload)
@@ -104,14 +107,6 @@ class ServerCommunicator:
             except Exception as e:
                 print(f"[Gossip] Failed to send to {node.port}: {e}")
 
-
-    def notify_server(self, server):
-        message = Message(
-            msg_type=MessageType.GOSSIP_SERVER_LIST,
-            payload={ "ports": [s.port for s in self.servers] , "hashes": [s.hash for s in self.servers]}
-        )
-        server.socket.send(message.serialize())
-        print(f"[Gossip] Notified server {server.port} of my presence.")
 
     def loop(self):
         print("[System] Entering main server loop...")
@@ -134,8 +129,6 @@ class ServerCommunicator:
         match message.msg_type:
             case MessageType.GOSSIP:
                 self.thread_pool.submit(self.handle_gossip, identity, message.payload)
-            case MessageType.GOSSIP_SERVER_REMOVAL:
-                self.thread_pool.submit(self.handle_gossip_server_removal, identity, message.payload)
             case MessageType.REQUEST_FULL_LIST:
                 self.thread_pool.submit(self.handle_request_full_list, identity, message.payload)
             case MessageType.REPLICA:
@@ -181,35 +174,66 @@ class ServerCommunicator:
     def handle_gossip(self, identity, payload):
         incoming_servers = payload.get("servers", [])
         incoming_proxies = payload.get("proxies", [])
+        hash_ring_version = payload.get("hash_ring_version", 1)
 
         # Process Servers
         my_server_ports = {str(s.port) for s in self.servers}
         my_server_ports.add(str(self.port))
 
-        for p in incoming_servers:
-            if str(p) not in my_server_ports:
-                print(f"[Gossip] Discovered new Server: {p}")
-                self.connect_to_server(int(p))
+        if hash_ring_version < self.hash_ring_version:
+            return # Ignore outdated gossip
+        
+        if hash_ring_version == self.hash_ring_version:
+            self.hash_ring_version = hash_ring_version
+            for p in incoming_servers:
+                if str(p) not in my_server_ports:
+                    print(f"[Gossip] Discovered new Server: {p}")
+                    self.connect_to_server(int(p))
 
-        # Process Proxies
-        my_proxy_ports = {str(p.port) for p in self.proxies}
+            # Process Proxies
+            my_proxy_ports = {str(p.port) for p in self.proxies}
 
-        for p in incoming_proxies:
-            if str(p) not in my_proxy_ports:
-                print(f"[Gossip] Discovered new Proxy: {p}")
-                self.connect_to_proxy(int(p))
+            for p in incoming_proxies:
+                if str(p) not in my_proxy_ports:
+                    print(f"[Gossip] Discovered new Proxy: {p}")
+                    self.connect_to_proxy(int(p))
+            hash_ring_version += 1
+        if hash_ring_version > self.hash_ring_version:
+            print(f"[Gossip] Detected newer hash ring version {hash_ring_version}, updating from {self.hash_ring_version}")
+            self.hash_ring_version = hash_ring_version
+
+            incoming_servers_set = {str(p) for p in incoming_servers}
+            incoming_proxies_set = {str(p) for p in incoming_proxies}
+
+            servers_to_remove = []
+            for s in self.servers:
+                if str(s.port) not in incoming_servers_set and s.port != self.port:
+                    servers_to_remove.append(s)
+
+            for s in servers_to_remove:
+                print(f"[Gossip] Removing stale Server: {s.port}")
+                self.remove_server(s.port)
+
+            proxies_to_remove = []
+            for p in self.proxies:
+                if str(p.port) not in incoming_proxies_set:
+                    proxies_to_remove.append(p)
+
+            for p in proxies_to_remove:
+                print(f"[Gossip] Removing stale Proxy: {p.port}")
+                self.remove_proxy(p.port)
 
 
-    def handle_gossip_server_removal(self, identity, payload):
-        print(f"[Network] Handling GOSSIP_SERVER_REMOVAL from {identity}: {payload}")
-        removed_port = payload["port"]
-        self.servers = [s for s in self.servers if s.port != removed_port]
-        print(f"[Network] Removed server {removed_port} from known servers.")
+            for p in incoming_servers:
+                if str(p) not in my_server_ports:
+                    print(f"[Gossip] Discovered new Server: {p}")
+                    self.connect_to_server(int(p))
 
-        message = Message(msg_type=MessageType.GOSSIP_SERVER_REMOVAL, payload={"port": removed_port})
-        for server in random.sample(self.servers, min(len(self.servers), GOSSIP_FANOUT)):
-            server.socket.send(message.serialize())
-            print(f"[Gossip] Informed server {server.port} of removal of server {removed_port}.")
+            for p in incoming_proxies:
+                if str(p) not in my_proxy_ports:
+                    print(f"[Gossip] Discovered new Proxy: {p}")
+                    self.connect_to_proxy(int(p))
+
 
     def heartbeat(self):
 

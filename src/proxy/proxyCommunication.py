@@ -39,6 +39,7 @@ class ProxyCommunicator:
         self.proxy_interface_socket = None  
         self.proxies = []
         self.servers = []
+        self.hash_ring_version = 1 
 
     def start(self):
         print(f"[ProxyCommunicator] Starting proxy on port {self.port}")
@@ -70,7 +71,8 @@ class ProxyCommunicator:
 
         payload = {
             "proxies": current_proxy_ports,
-            "servers": current_server_ports
+            "servers": current_server_ports,
+            "hash_ring_version": self.hash_ring_version
         }
         
         message = Message(msg_type=MessageType.GOSSIP, payload=payload)
@@ -92,6 +94,69 @@ class ProxyCommunicator:
                     node.socket.send(serialized_msg)
             except Exception as e:
                 print(f"[Gossip] Failed to send to {node.port}: {e}")
+
+    def handle_gossip(self, identity, payload):
+        incoming_servers = payload.get("servers", [])
+        incoming_proxies = payload.get("proxies", [])
+        hash_ring_version = payload.get("hash_ring_version", 1)
+
+        # Process Servers
+        my_server_ports = {str(s.port) for s in self.servers}
+        my_server_ports.add(str(self.port))
+
+        if hash_ring_version < self.hash_ring_version:
+            return # Ignore outdated gossip
+        
+        if hash_ring_version == self.hash_ring_version:
+            self.hash_ring_version = hash_ring_version
+            for p in incoming_servers:
+                if str(p) not in my_server_ports:
+                    print(f"[Gossip] Discovered new Server: {p}")
+                    self.connect_to_server(int(p))
+
+            # Process Proxies
+            my_proxy_ports = {str(p.port) for p in self.proxies}
+
+            for p in incoming_proxies:
+                if str(p) not in my_proxy_ports:
+                    print(f"[Gossip] Discovered new Proxy: {p}")
+                    self.connect_to_proxy(int(p))
+            hash_ring_version += 1
+        if hash_ring_version > self.hash_ring_version:
+            print(f"[Gossip] Detected newer hash ring version {hash_ring_version}, updating from {self.hash_ring_version}")
+            self.hash_ring_version = hash_ring_version
+
+            incoming_servers_set = {str(p) for p in incoming_servers}
+            incoming_proxies_set = {str(p) for p in incoming_proxies}
+
+            servers_to_remove = []
+            for s in self.servers:
+                if str(s.port) not in incoming_servers_set and s.port != self.port:
+                    servers_to_remove.append(s)
+
+            for s in servers_to_remove:
+                print(f"[Gossip] Removing stale Server: {s.port}")
+                self.remove_server(s.port)
+
+            proxies_to_remove = []
+            for p in self.proxies:
+                if str(p.port) not in incoming_proxies_set:
+                    proxies_to_remove.append(p)
+
+            for p in proxies_to_remove:
+                print(f"[Gossip] Removing stale Proxy: {p.port}")
+                self.remove_proxy(p.port)
+
+
+            for p in incoming_servers:
+                if str(p) not in my_server_ports:
+                    print(f"[Gossip] Discovered new Server: {p}")
+                    self.connect_to_server(int(p))
+
+            for p in incoming_proxies:
+                if str(p) not in my_proxy_ports:
+                    print(f"[Gossip] Discovered new Proxy: {p}")
+                    self.connect_to_proxy(int(p))
 
     def setup_proxy_interface_socket(self):
         self.proxy_interface_socket = self.context.socket(pyzmq.ROUTER)
@@ -116,48 +181,11 @@ class ProxyCommunicator:
         message = Message(json_str=msg_bytes)
         print(f"[Network] Received message from {identity}: {message.msg_type}, {message.payload}")
         match message.msg_type:
+            case MessageType.GOSSIP:
+                self.thread_pool.submit(self.handle_gossip, identity, message.payload)
             case _:
                 print(f"[Network] Unknown message type: {message.msg_type}")
 
-    def handle_heartbeat(self, identity, payload):
-        print(f"[Network] Handling HEARTBEAT from {identity}: {payload}")
-        ack_message = Message(msg_type=MessageType.HEARTBEAT_ACK, payload={})
-        self.proxy_interface_socket.send_multipart([identity, ack_message.serialize()])
-        print(f"[Network] Sent HEARTBEAT_ACK to {identity}")
-    
-    def handle_proxy_introduction(self, identity, payload):
-        print(f"[Network] Handling PROXY_INTRODUCTION from {identity}: {payload}")
 
-        new_proxy = Proxy(payload["port"])
-        self.proxies.append(new_proxy)
-        new_socket = self.context.socket(pyzmq.DEALER)
-        new_socket.connect(f"tcp://localhost:{payload['port']}")
-        new_proxy.setSocket(new_socket)
-
-        ack_message = Message(msg_type=MessageType.PROXY_INTRODUCTION_ACK, payload={})
-        self.proxy_interface_socket.send_multipart([identity, ack_message.serialize()])
-        print(f"[Network] Sent PROXY_INTRODUCTION_ACK to {identity}")
-
-    def handle_hashring_update(self, identity, payload):
-        print(f"[Network] Handling HASHRING_UPDATE from {identity}: {payload}")
-        new_ports = payload["ports"]
-        new_hashes = payload["hashes"]
-
-        for port, hash in zip(new_ports, new_hashes):
-            if port not in [s.port for s in self.servers]:
-                new_server = Server(port, hash)
-                self.servers.append(new_server)
-                new_socket = self.context.socket(pyzmq.DEALER)
-                new_socket.connect(f"tcp://localhost:{port}")
-                new_server.setSocket(new_socket)
-
-        for port in [s.port for s in self.servers]: # very inefficient but whatever
-            if port not in new_ports:
-                self.servers = [s for s in self.servers if s.port != port]
-
-        message = Message(msg_type=MessageType.HASHRING_UPDATE_ACK, payload={})
-        self.proxy_interface_socket.send_multipart([identity, message.serialize()])
-        
-        print(f"[Network] Updated hashring with ports: {new_ports} and hashes: {new_hashes}")
 
     

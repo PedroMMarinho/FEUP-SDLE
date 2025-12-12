@@ -11,7 +11,6 @@ PROXY_BASE_PORT = 6000
 SERVER_LOG_DIR = "src/server/server_logs"
 PROXY_LOG_DIR = "src/proxy/proxy_logs"
 
-# TODO Should this create the files or do we need to create them manually?
 def initial_setup():
     """
     Matches: make servers
@@ -19,6 +18,13 @@ def initial_setup():
     """
     os.makedirs(SERVER_LOG_DIR, exist_ok=True)
     os.makedirs(PROXY_LOG_DIR, exist_ok=True)
+
+    if os.path.exists(f"{SERVER_LOG_DIR}/known_servers.txt"):
+        os.remove(f"{SERVER_LOG_DIR}/known_servers.txt")
+    if os.path.exists(f"{PROXY_LOG_DIR}/known_proxies.txt"):
+        os.remove(f"{PROXY_LOG_DIR}/known_proxies.txt")
+
+     # Start 5 servers
 
     with open(f"{SERVER_LOG_DIR}/known_servers.txt", "w") as f:
         for i in range(1, 6):
@@ -28,7 +34,7 @@ def initial_setup():
                 "--id", f"Server_{i}",
                 "--port", str(SERVER_BASE_PORT + i - 1),
                 "--db", f"server_{i}",
-                "--servers", "known_servers.txt"
+                "--servers", f"{SERVER_LOG_DIR}/known_servers.txt"
             ], stdout=open(f"{SERVER_LOG_DIR}/server{i}.log", "w"), stderr=subprocess.STDOUT)
             
 
@@ -42,7 +48,7 @@ def initial_setup():
                 "--id", f"Proxy_{i}",
                 "--port", str(PROXY_BASE_PORT + i - 1),
                 "--db", f"proxy_{i}",
-                "--proxies", "known_proxies.txt"
+                "--proxies", f"{PROXY_LOG_DIR}/known_proxies.txt"
             ], stdout=open(f"{PROXY_LOG_DIR}/proxy{i}.log", "w"), stderr=subprocess.STDOUT)
 
     print("Initial 2 proxies started (matching `make proxies`).")
@@ -77,10 +83,9 @@ def add_server():
     subprocess.Popen([
         "python3", "-m", "src.server.main",
         "--id", server_name,
-        "--seed", "False",
         "--port", str(next_port),
         "--db", f"server_{next_id}",
-        "--known_server_port", str(SERVER_BASE_PORT)
+        "--servers", f"{SERVER_LOG_DIR}/known_servers.txt",
     ], stdout=open(logfile, "w"), stderr=subprocess.STDOUT)
 
 
