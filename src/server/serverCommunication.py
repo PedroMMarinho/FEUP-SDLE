@@ -51,6 +51,7 @@ class ServerCommunicator:
         self.setup_server_interface_socket()
         print(f"[System] Starting server on port {self.port}...")
         self.setup_servers()
+        self.setup_proxies()
         self.thread_pool.submit(self.gossip_loop)
         self.thread_pool.submit(self.heartbeat)
         self.loop()
@@ -59,6 +60,16 @@ class ServerCommunicator:
         self.server_interface_socket = self.context.socket(zmq.ROUTER)
         self.server_interface_socket.bind(f"tcp://localhost:{self.port}")
         self.poller.register(self.server_interface_socket, zmq.POLLIN)
+
+    def setup_proxies(self):
+        print("[Network] Setting up known proxies...")
+        for port, _ in self.known_proxies:
+            proxy = Proxy(port)
+            self.proxies.append(proxy)
+            socket = self.context.socket(zmq.DEALER)
+            socket.connect(f"tcp://localhost:{port}")
+            proxy.setSocket(socket)
+
 
     def setup_servers(self):
         print("[Network] Setting up known servers...")
@@ -100,6 +111,7 @@ class ServerCommunicator:
         if self.proxies:
             targets.extend(random.sample(self.proxies, min(len(self.proxies), GOSSIP_FANOUT)))
 
+        print(f"[Gossip] Sending GOSSIP to  {[t.port for t in targets]}")
         for node in targets:
             try:
                 if node.socket:
@@ -206,25 +218,28 @@ class ServerCommunicator:
         # Process Servers
         my_server_ports = {str(s.port) for s in self.servers}
         my_server_ports.add(str(self.port))
+        my_proxy_ports = {str(p.port) for p in self.proxies}
 
         if hash_ring_version < self.hash_ring_version:
             return # Ignore outdated gossip
         
         if hash_ring_version == self.hash_ring_version:
             self.hash_ring_version = hash_ring_version
+            if set(incoming_servers) == my_server_ports and set(incoming_proxies) == {str(p.port) for p in self.proxies}:
+                return 
+
             for p in incoming_servers:
                 if str(p) not in my_server_ports:
                     print(f"[Gossip] Discovered new Server: {p}")
-                    self.connect_to_server(int(p))
+                    self.connect_to_server(p)
 
-            # Process Proxies
-            my_proxy_ports = {str(p.port) for p in self.proxies}
 
             for p in incoming_proxies:
                 if str(p) not in my_proxy_ports:
                     print(f"[Gossip] Discovered new Proxy: {p}")
-                    self.connect_to_proxy(int(p))
+                    self.connect_to_proxy(p)
             hash_ring_version += 1
+
         if hash_ring_version > self.hash_ring_version:
             print(f"[Gossip] Detected newer hash ring version {hash_ring_version}, updating from {self.hash_ring_version}")
             self.hash_ring_version = hash_ring_version
@@ -254,12 +269,12 @@ class ServerCommunicator:
             for p in incoming_servers:
                 if str(p) not in my_server_ports:
                     print(f"[Gossip] Discovered new Server: {p}")
-                    self.connect_to_server(int(p))
+                    self.connect_to_server(p)
 
             for p in incoming_proxies:
                 if str(p) not in my_proxy_ports:
                     print(f"[Gossip] Discovered new Proxy: {p}")
-                    self.connect_to_proxy(int(p))
+                    self.connect_to_proxy(p)
 
 
     def heartbeat(self):

@@ -54,7 +54,7 @@ def initial_setup():
         for i in range(1, 6):
             port = SERVER_BASE_PORT + i - 1
             proc = subprocess.Popen([
-                sys.executable, "-m", "src.server.main", 
+                sys.executable, "-u", "-m", "src.server.main", 
                 "--port", str(port),
                 "--db", f"server_{i}",
                 "--servers", f"{SERVER_LOG_DIR}/known_servers.txt"
@@ -67,18 +67,18 @@ def initial_setup():
 
     # --- 3. START PROXIES AND TRACK PIDS ---
     print("Starting Proxies...")
-    with open(PROXY_PIDS_FILE, "w") as pid_f:
+    with open(PROXY_PIDS_FILE, "w") as pid_w:
         for i in range(1, 3):
             port = PROXY_BASE_PORT + i - 1
             proc = subprocess.Popen([
-                sys.executable, "-m", "src.proxy.main",   
+                sys.executable, "-u", "-m", "src.proxy.main",   
                 "--port", str(port),
                 "--proxies", f"{PROXY_LOG_DIR}/known_proxies.txt",
-                "--servers", f"{SERVER_LOG_DIR}/known_servers.txt"
+                "--servers", f"{SERVER_LOG_DIR}/known_servers.txt",
             ], stdout=open(f"{PROXY_LOG_DIR}/proxy{i}.log", "w"), stderr=subprocess.STDOUT)
             
             # Write PID to file
-            pid_f.write(f"{proc.pid}\n")
+            pid_w.write(f"{proc.pid}\n")
 
     print(f"Initial 2 proxies started (PIDs saved to {PROXY_PIDS_FILE}).")
 

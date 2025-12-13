@@ -24,7 +24,7 @@ def main():
                     line = line.strip()
                     if line:
                         name, port_str = line.split(":")
-                        known_server_ports.append((port_str, hashlib.sha256(f"server_{port_str}".encode()).hexdigest()))
+                        known_server_ports.append((str(port_str), hashlib.sha256(f"server_{port_str}".encode()).hexdigest()))
         except Exception as e:
             print(f"[Warning] Could not read known servers/proxies file: {e}")
 
@@ -39,7 +39,7 @@ def main():
                     line = line.strip()
                     if line:
                         name, port_str = line.split(":")
-                        known_proxy_ports.append((port_str, hashlib.sha256(f"proxy_{port_str}".encode()).hexdigest()))
+                        known_proxy_ports.append((str(port_str), hashlib.sha256(f"proxy_{port_str}".encode()).hexdigest()))
         except Exception as e:
             print(f"[Warning] Could not read known servers/proxies file: {e}")
 

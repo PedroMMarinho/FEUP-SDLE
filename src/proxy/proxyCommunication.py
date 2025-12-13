@@ -37,7 +37,7 @@ class ProxyCommunicator:
 
         self.context = zmq.Context()
         self.poller = zmq.Poller()
-        self.thread_pool = ThreadPool(num_threads=4)
+        self.thread_pool = ThreadPool(8)
         self.running = True
 
         self.proxy_interface_socket = None  
@@ -49,9 +49,24 @@ class ProxyCommunicator:
         print(f"[ProxyCommunicator] Starting proxy on port {self.port}")
         self.setup_proxy_interface_socket()
 
+        self.setup_proxy()
+        self.setup_server()
+
         self.thread_pool.submit(self.gossip_loop)
 
         self.loop()
+
+
+    def setup_proxy(self):
+        print("[Network] Setting up known proxies...")
+        for port , _ in self.known_proxy_ports:
+            self.connect_to_proxy(port)
+    
+    def setup_server(self):
+        print("[Network] Setting up known servers...")
+        for port , hash in self.known_server_ports:
+            self.connect_to_server(port, hash)
+
 
     def gossip_loop(self):
         print("[Gossip] Loop started.")
@@ -73,6 +88,7 @@ class ProxyCommunicator:
         current_server_ports = [str(s.port) for s in self.servers]
         current_server_ports = list(set(current_server_ports))
 
+ 
         payload = {
             "proxies": current_proxy_ports,
             "servers": current_server_ports,
@@ -99,6 +115,36 @@ class ProxyCommunicator:
             except Exception as e:
                 print(f"[Gossip] Failed to send to {node.port}: {e}")
 
+    def connect_to_server(self, port, hash_val=None):
+        if any(str(s.port) == str(port) for s in self.servers):
+            return
+        
+        if hash_val is None:
+            hash_val = hashlib.sha256(f"server_{port}".encode()).hexdigest()
+
+        server = Server(port, hash_val)
+        try:
+            sock = self.context.socket(zmq.DEALER)
+            sock.connect(f"tcp://localhost:{port}")
+            server.setSocket(sock)
+            self.servers.append(server)
+        except Exception as e:
+            print(f"[Error] Failed to connect to server {port}: {e}")
+
+    def connect_to_proxy(self, port):
+        if any(str(p.port) == str(port) for p in self.proxies):
+            return
+
+        proxy = Proxy(port)
+        try:
+            sock = self.context.socket(zmq.DEALER)
+            sock.connect(f"tcp://localhost:{port}")
+            proxy.setSocket(sock)
+            self.proxies.append(proxy)
+        except Exception as e:
+            print(f"[Error] Failed to connect to proxy {port}: {e}")
+
+
     def handle_gossip(self, identity, payload):
         incoming_servers = payload.get("servers", [])
         incoming_proxies = payload.get("proxies", [])
@@ -107,25 +153,30 @@ class ProxyCommunicator:
         # Process Servers
         my_server_ports = {str(s.port) for s in self.servers}
         my_server_ports.add(str(self.port))
+        my_proxy_ports = {str(p.port) for p in self.proxies}
 
+        print(f"[Gossip] Handling gossip from {identity}: servers={incoming_servers}, proxies={incoming_proxies}, version={hash_ring_version}")
         if hash_ring_version < self.hash_ring_version:
             return # Ignore outdated gossip
         
         if hash_ring_version == self.hash_ring_version:
             self.hash_ring_version = hash_ring_version
+            if set(incoming_servers) == my_server_ports and set(incoming_proxies) == {str(p.port) for p in self.proxies}:
+                return 
+            
             for p in incoming_servers:
                 if str(p) not in my_server_ports:
                     print(f"[Gossip] Discovered new Server: {p}")
-                    self.connect_to_server(int(p))
+                    self.connect_to_server(p)
 
-            # Process Proxies
-            my_proxy_ports = {str(p.port) for p in self.proxies}
 
             for p in incoming_proxies:
                 if str(p) not in my_proxy_ports:
                     print(f"[Gossip] Discovered new Proxy: {p}")
-                    self.connect_to_proxy(int(p))
+                    self.connect_to_proxy(p)
+
             hash_ring_version += 1
+
         if hash_ring_version > self.hash_ring_version:
             print(f"[Gossip] Detected newer hash ring version {hash_ring_version}, updating from {self.hash_ring_version}")
             self.hash_ring_version = hash_ring_version
@@ -155,12 +206,12 @@ class ProxyCommunicator:
             for p in incoming_servers:
                 if str(p) not in my_server_ports:
                     print(f"[Gossip] Discovered new Server: {p}")
-                    self.connect_to_server(int(p))
+                    self.connect_to_server(p)
 
             for p in incoming_proxies:
                 if str(p) not in my_proxy_ports:
                     print(f"[Gossip] Discovered new Proxy: {p}")
-                    self.connect_to_proxy(int(p))
+                    self.connect_to_proxy(p)
 
     def remove_server(self, port):
         for s in list(self.servers):  # copy to avoid mutation issues
@@ -200,8 +251,9 @@ class ProxyCommunicator:
         while self.running:
             socks = dict(self.poller.poll(1000))
             for sock in socks:
-                if socks[sock] == zmq.POLLIN: # idk
-                    if sock == self.proxy_interface_socket: # idk
+                if socks[sock] == zmq.POLLIN:
+                    if sock == self.proxy_interface_socket:
+                        print("[ProxyCommunicator] Incoming message on proxy interface socket")
                         self.handle_proxy_interface_socket()
 
         self.context.destroy()
