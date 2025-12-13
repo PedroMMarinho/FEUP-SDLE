@@ -1,5 +1,4 @@
 import zmq
-import pyzmq
 from src.common.threadPool.threadPool import ThreadPool
 from src.common.messages.messages import Message, MessageType
 import hashlib
@@ -36,8 +35,8 @@ class ProxyCommunicator:
         self.known_server_ports = known_server_ports
         self.known_proxy_ports = known_proxy_ports
 
-        self.context = pyzmq.Context()
-        self.poller = pyzmq.Poller()
+        self.context = zmq.Context()
+        self.poller = zmq.Poller()
         self.thread_pool = ThreadPool(num_threads=4)
         self.running = True
 
@@ -192,7 +191,7 @@ class ProxyCommunicator:
 
 
     def setup_proxy_interface_socket(self):
-        self.proxy_interface_socket = self.context.socket(pyzmq.ROUTER)
+        self.proxy_interface_socket = self.context.socket(zmq.ROUTER)
         self.proxy_interface_socket.bind(f"tcp://localhost:{self.port}")
         print(f"[ProxyCommunicator] Proxy interface socket bound to port {self.port}")
 
@@ -201,7 +200,7 @@ class ProxyCommunicator:
         while self.running:
             socks = dict(self.poller.poll(1000))
             for sock in socks:
-                if socks[sock] == pyzmq.POLLIN: # idk
+                if socks[sock] == zmq.POLLIN: # idk
                     if sock == self.proxy_interface_socket: # idk
                         self.handle_proxy_interface_socket()
 
@@ -236,14 +235,14 @@ class ProxyCommunicator:
 
         # Connect or reuse socket
         if server.socket is None:
-            sock = self.context.socket(pyzmq.DEALER)
+            sock = self.context.socket(zmq.DEALER)
             sock.connect(f"tcp://localhost:{server.port}")
             server.setSocket(sock)
         else:
             sock = server.socket
 
-        poller = pyzmq.Poller()
-        poller.register(sock, pyzmq.POLLIN)
+        poller = zmq.Poller()
+        poller.register(sock, zmq.POLLIN)
 
         timeout = base_timeout
 
@@ -351,14 +350,14 @@ class ProxyCommunicator:
         )
 
         if server.socket is None:
-            sock = self.context.socket(pyzmq.DEALER)
+            sock = self.context.socket(zmq.DEALER)
             sock.connect(f"tcp://localhost:{server.port}")
             server.setSocket(sock)
         else:
             sock = server.socket
 
-        poller = pyzmq.Poller()
-        poller.register(sock, pyzmq.POLLIN)
+        poller = zmq.Poller()
+        poller.register(sock, zmq.POLLIN)
 
         for attempt in range(1, retries + 1):
             sock.send(message.serialize())

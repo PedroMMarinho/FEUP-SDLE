@@ -75,9 +75,6 @@ def main():
         ui.loop()
     except Exception as e:
         print(f"Crash: {e}")
-    finally:
-        comm.running = False
-        comm.join()
 
 if __name__ == "__main__":
     main()

@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS ShoppingList (
     uuid UUID PRIMARY KEY,      
     name TEXT NOT NULL,
     crdt JSONB NOT NULL,
-    logical_clock INTEGER DEFAULT 0
+    logical_clock INTEGER DEFAULT 0,
     notSent BOOLEAN DEFAULT FALSE
 );
 

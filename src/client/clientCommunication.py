@@ -1,6 +1,6 @@
-import pyzmq
+import zmq
 import time
-from common.crdt.improved.ShoppingList import ShoppingList
+from src.common.crdt.improved.ShoppingList import ShoppingList
 from src.common.messages.messages import Message, MessageType
 import random
 
@@ -18,7 +18,7 @@ class ClientCommunicator():
         self.db_path = db_path
         self.client_id = client_id
         self.known_proxies = known_proxies
-        self.context = pyzmq.Context()
+        self.context = zmq.Context()
 
         self.running = True
         self.storage = storage
@@ -32,13 +32,13 @@ class ClientCommunicator():
         for port in self.known_proxies:
             proxy = Proxy(port)
             self.proxies.append(proxy)
-            proxy_socket = self.context.socket(pyzmq.DEALER)
+            proxy_socket = self.context.socket(zmq.DEALER)
             proxy_socket.connect(f"tcp://localhost:{port}")
             proxy.setSocket(proxy_socket)
     
     def init_subscriber_socket(self):
-        self.subscriber = self.context.socket(pyzmq.SUB)
-        self.subscriber.setsockopt_string(pyzmq.SUBSCRIBE, "")
+        self.subscriber = self.context.socket(zmq.SUB)
+        self.subscriber.setsockopt_string(zmq.SUBSCRIBE, "")
 
         for proxy in self.proxies:
             pub_port = proxy.port + 1  # convention: PUB = DEALER + 1
@@ -57,8 +57,8 @@ class ClientCommunicator():
         """
         print("[Network] Background sync thread started")
 
-        poller = pyzmq.Poller()
-        poller.register(self.subscriber, pyzmq.POLLIN)
+        poller = zmq.Poller()
+        poller.register(self.subscriber, zmq.POLLIN)
 
         while self.running:
             try:
@@ -70,7 +70,7 @@ class ClientCommunicator():
 
                     self._handle_incoming_message(message)
 
-            except pyzmq.ContextTerminated:
+            except zmq.ContextTerminated:
                 break
             except Exception as e:
                 print(f"[Network] Subscriber error: {e}")
@@ -85,8 +85,8 @@ class ClientCommunicator():
         Returns True on ACK, False otherwise.
         """
         socket = proxy.socket
-        poller = pyzmq.Poller()
-        poller.register(socket, pyzmq.POLLIN)
+        poller = zmq.Poller()
+        poller.register(socket, zmq.POLLIN)
 
         timeout = base_timeout
 
@@ -100,7 +100,7 @@ class ClientCommunicator():
 
             socks = dict(poller.poll(timeout))
 
-            if socket in socks and socks[socket] == pyzmq.POLLIN:
+            if socket in socks and socks[socket] == zmq.POLLIN:
                 reply = Message(json_str=socket.recv())
 
                 if reply.msg_type == MessageType.SENT_FULL_LIST_ACK:
@@ -174,8 +174,8 @@ class ClientCommunicator():
         Returns the CRDT payload on success, None on failure.
         """
         socket = proxy.socket
-        poller = pyzmq.Poller()
-        poller.register(socket, pyzmq.POLLIN)
+        poller = zmq.Poller()
+        poller.register(socket, zmq.POLLIN)
 
         timeout = base_timeout
 
@@ -190,7 +190,7 @@ class ClientCommunicator():
 
             socks = dict(poller.poll(timeout))
 
-            if socket in socks and socks[socket] == pyzmq.POLLIN:
+            if socket in socks and socks[socket] == zmq.POLLIN:
                 reply = Message(json_str=socket.recv())
 
                 if reply.msg_type == MessageType.SENT_FULL_LIST_ACK:
@@ -263,10 +263,10 @@ class ClientCommunicator():
         return random.choice(self.proxies)
     
     def subscribe_to_list(self, list_id):
-        self.subscriber.setsockopt_string(pyzmq.SUBSCRIBE, list_id)
+        self.subscriber.setsockopt_string(zmq.SUBSCRIBE, list_id)
         print(f"[Network] Subscribed to updates for list {list_id}")
     
     def unsubscribe_from_list(self, list_id):
-        self.subscriber.setsockopt_string(pyzmq.UNSUBSCRIBE, list_id)
+        self.subscriber.setsockopt_string(zmq.UNSUBSCRIBE, list_id)
         print(f"[Network] Unsubscribed from updates for list {list_id}")
 

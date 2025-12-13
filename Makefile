@@ -1,5 +1,5 @@
 # --- Variables ---
-PYTHON = python3
+PYTHON = venv/bin/python3
 SRC_DIR = src
 DB_CONTAINER_NAME = shopping-db
 DB_PASSWORD = password
@@ -59,15 +59,20 @@ remove_server:
 # --- CLEANUP ---
 clean-logs:
 	rm -f $(SERVER_LOG_DIR)/server*.log
+	rm -f $(PROXY_LOG_DIR)/proxy*.log
 	@echo "Server logs cleaned."
 
 stop-servers:
 	@pkill -f "python3 -m src.server.main" || true
+	rm -f $(SERVER_LOG_DIR)/known_servers.txt
+	rm -f $(PROXY_LOG_DIR)/known_proxies.txt
 	@echo "All servers stopped."
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
-	@echo "Python cache cleaned."
+	clean-logs
+	stop-servers
+	@echo "Cleanup complete."
 
 help:
 	@echo "Available commands:"

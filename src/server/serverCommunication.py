@@ -1,6 +1,6 @@
 import hashlib
-import pyzmq
-from common.messages.messages import Message, MessageType
+import zmq
+from src.common.messages.messages import Message, MessageType
 from src.common.threadPool.threadPool import ThreadPool
 import time 
 import random 
@@ -36,8 +36,8 @@ class ServerCommunicator:
         self.known_proxies = known_proxies
         self.running = True
         self.daemon = True 
-        self.context = pyzmq.Context()
-        self.poller = pyzmq.Poller()
+        self.context = zmq.Context()
+        self.poller = zmq.Poller()
         self.server_interface_socket = None
         self.servers = []
         self.proxies = []
@@ -56,16 +56,16 @@ class ServerCommunicator:
         self.loop()
 
     def setup_server_interface_socket(self):
-        self.server_interface_socket = self.context.socket(pyzmq.ROUTER)
+        self.server_interface_socket = self.context.socket(zmq.ROUTER)
         self.server_interface_socket.bind(f"tcp://localhost:{self.port}")
-        self.poller.register(self.server_interface_socket, pyzmq.POLLIN)
+        self.poller.register(self.server_interface_socket, zmq.POLLIN)
 
     def setup_servers(self):
         print("[Network] Setting up known servers...")
         for port, hash in self.known_servers:
             server = Server(port, hash)
             self.servers.append(server)
-            socket = self.context.socket(pyzmq.DEALER)
+            socket = self.context.socket(zmq.DEALER)
             socket.connect(f"tcp://localhost:{port}")
             server.setSocket(socket)
 
@@ -113,7 +113,7 @@ class ServerCommunicator:
         while self.running:
             socks = dict(self.poller.poll(1000))
             for sock in socks:
-                if socks[sock] == pyzmq.POLLIN: # idk
+                if socks[sock] == zmq.POLLIN: # idk
                     if sock == self.server_interface_socket: # idk
                         self.handle_server_interface_socket()
 
@@ -150,7 +150,7 @@ class ServerCommunicator:
 
         server = Server(port, hash_val)
         try:
-            sock = self.context.socket(pyzmq.DEALER)
+            sock = self.context.socket(zmq.DEALER)
             sock.connect(f"tcp://localhost:{port}")
             server.setSocket(sock)
             self.servers.append(server)
@@ -163,7 +163,7 @@ class ServerCommunicator:
 
         proxy = Proxy(port)
         try:
-            sock = self.context.socket(pyzmq.DEALER)
+            sock = self.context.socket(zmq.DEALER)
             sock.connect(f"tcp://localhost:{port}")
             proxy.setSocket(sock)
             self.proxies.append(proxy)
@@ -413,7 +413,7 @@ class ServerCommunicator:
 
         # Connect or reuse socket
         if server.socket is None:
-            server_socket = self.context.socket(pyzmq.DEALER)
+            server_socket = self.context.socket(zmq.DEALER)
             server_socket.connect(f"tcp://localhost:{server.port}")
             server.setSocket(server_socket)
         else:
@@ -422,8 +422,8 @@ class ServerCommunicator:
         retries = 3
         timeout = 1000  # ms
 
-        poller = pyzmq.Poller()
-        poller.register(server_socket, pyzmq.POLLIN)
+        poller = zmq.Poller()
+        poller.register(server_socket, zmq.POLLIN)
 
         for attempt in range(1, retries + 1):
             print(f"[Replica] Sending REPLICA x{len(replica_list)} to {server.port} "
@@ -432,7 +432,7 @@ class ServerCommunicator:
             server_socket.send(replica_message.serialize())
             socks = dict(poller.poll(timeout))
 
-            if server_socket in socks and socks[server_socket] == pyzmq.POLLIN:
+            if server_socket in socks and socks[server_socket] == zmq.POLLIN:
                 reply = Message(json_str=server_socket.recv())
 
                 if reply.msg_type == MessageType.REPLICA_ACK:
@@ -474,7 +474,7 @@ class ServerCommunicator:
 
         # Create / reuse socket
         if server.socket is None:
-            s = self.context.socket(pyzmq.DEALER)
+            s = self.context.socket(zmq.DEALER)
             s.connect(f"tcp://localhost:{server.port}")
             server.setSocket(s)
         else:
@@ -483,8 +483,8 @@ class ServerCommunicator:
         retries = 3
         timeout = 1000  # ms
 
-        poller = pyzmq.Poller()
-        poller.register(s, pyzmq.POLLIN)
+        poller = zmq.Poller()
+        poller.register(s, zmq.POLLIN)
 
         for attempt in range(1, retries + 1):
             print(f"[Handoff] Sending SENT_FULL_LIST to {server.port} "
@@ -494,7 +494,7 @@ class ServerCommunicator:
 
             socks = dict(poller.poll(timeout))
 
-            if s in socks and socks[s] == pyzmq.POLLIN:
+            if s in socks and socks[s] == zmq.POLLIN:
                 reply_bytes = s.recv()
                 reply = Message(json_str=reply_bytes)
 
