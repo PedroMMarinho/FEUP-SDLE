@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS ShoppingList (
     name TEXT NOT NULL,
     crdt JSONB NOT NULL,
     logical_clock INTEGER DEFAULT 0
+    notSent BOOLEAN DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS ShoppingListItem (

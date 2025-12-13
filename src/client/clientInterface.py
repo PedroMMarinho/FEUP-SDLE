@@ -4,10 +4,10 @@ from src.common.crdt.improved.ShoppingList import ShoppingList
 from src.client.storage import ShoppingListStorage
 
 class ClientInterface:
-    def __init__(self, db_config, client_id, communicator):
+    def __init__(self, client_id, communicator, storage):
         self.client_id = client_id
-        self.communicator = communicator 
-        self.storage = ShoppingListStorage(db_config)
+        self.communicator = communicator
+        self.storage = storage
 
     def print_help(self):
         print("\n--- COMMANDS ---")
@@ -17,7 +17,9 @@ class ClientInterface:
         print("4. [a]dd <uuid> <item>   -> Add item to list")
         print("5. [d]el <uuid> <item>   -> Delete item from list")
         print("6. [u]pdate <uuid> <item> <qty_needed> [qty_acquired] -> Update item quantities")
-        print("7. [q]uit                -> Exit")
+        print("7. [r]equest <uuid>      -> Request full list from network")
+        print("8. [delete] <uuid>         -> Delete local list")
+        print("9. [q]uit                -> Exit")
 
     def create_list(self, name):
         list_uuid = str(uuid.uuid4())
@@ -29,7 +31,8 @@ class ClientInterface:
         self.storage.save_list(sl, name)
         print(f"Created list '{name}' with ID: {list_uuid}")
         
-        self.communicator.send_update(sl.uuid, sl.to_json())
+        self.communicator.send_full_list(sl.uuid, sl.to_json())
+        self.communicator.subscribe_to_list(sl.uuid)
 
     def show_lists(self):
         rows = self.storage.get_all_lists_metadata()
@@ -81,7 +84,7 @@ class ClientInterface:
         
         self.storage.save_list(sl)
         print(f"Added '{item_name}' (Need: {qty_needed}) | (Got: {acquired}) to list.")
-        self.communicator.send_update(list_id, sl.to_json())
+        self.communicator.send_full_list(list_id, sl.to_json())
 
     def update_item(self, list_id, item_name, needed, acquired=None):
         sl = self.storage.get_list_by_id(list_id)
@@ -115,7 +118,7 @@ class ClientInterface:
 
         self.storage.save_list(sl)
         print(f"Updated '{item_name}' -> Need: {target_needed}, Got: {target_acquired}")
-        self.communicator.send_update(list_id, sl.to_json())
+        self.communicator.send_full_list(list_id, sl.to_json())
 
     def delete_item(self, list_id, item_name):
         sl = self.storage.get_list_by_id(list_id)
@@ -127,7 +130,12 @@ class ClientInterface:
 
         self.storage.save_list(sl)
         print(f"Deleted '{item_name}'.")
-        self.communicator.send_update(list_id, sl.to_json())
+        self.communicator.send_full_list(list_id, sl.to_json())
+
+    def delete_list (self, list_id):
+        self.storage.delete_list(list_id)
+        self.communicator.unsubscribe_from_list(list_id)
+        print(f"Deleted local list with ID: {list_id}")
 
     def loop(self):
         print(f"--- Shopping List Client ({self.client_id}) ---")
@@ -165,6 +173,13 @@ class ClientInterface:
                         self.add_item(args[0], args[1], quantity=args[2])
                     case 'a' if len(args) == 2:
                         self.add_item(args[0], args[1], quantity=1)
+                    case 'r' if len(args) >= 1:
+                        list_id = args[0]
+                        print(f"Requesting full list for ID: {list_id} from network...")
+                        self.communicator.request_full_list(list_id)
+                    case 'delete' if len(args) >= 1:
+                        list_id = args[0]
+                        self.delete_list(list_id)
                     case _:
                         print("Invalid command.")
 

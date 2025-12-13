@@ -87,3 +87,35 @@ class ShoppingList:
 
     def to_json(self):
         return json.dumps(self.to_dict())
+    
+    @staticmethod
+    def from_json(json_str):
+        def recursive_deserialize(data):
+            if isinstance(data, dict):
+                if 'positive' in data and 'negative' in data:
+                    pc = PNCounter()
+                    pc.positive.counts = data['positive']['counts']
+                    pc.negative.counts = data['negative']['counts']
+                    return pc
+                elif 'elements' in data and 'tombstones' in data:
+                    ors = ORSet()
+                    ors.elements = {tuple(x) for x in data['elements']}
+                    ors.tombstones = {tuple(x) for x in data['tombstones']}
+                    return ors
+                else:
+                    return {k: recursive_deserialize(v) for k, v in data.items()}
+            else:
+                return data
+        
+        data = json.loads(json_str)
+        sl = ShoppingList(list_id=data['id'])
+        sl.clock = data['clock']
+        
+        for name, item_data in data.get('items', {}).items():
+            sl.items[name] = {
+                "needed": recursive_deserialize(item_data['needed']),
+                "acquired": recursive_deserialize(item_data['acquired']),
+                "existence": recursive_deserialize(item_data['existence'])
+            }
+        
+        return sl

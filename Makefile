@@ -35,10 +35,10 @@ clean-db: stop-db
 
 # --- RUNNING CLIENTS ---
 client1:
-	PYTHONPATH=$(PWD) $(PYTHON) -m src.client.main --id "User_A" --db "client_A.db"
+	PYTHONPATH=$(PWD) $(PYTHON) -m src.client.main --id "User_A" --db "client_A.db" --proxies $(PROXY_LOG_DIR)/known_proxies.txt
 
 client2:
-	PYTHONPATH=$(PWD) $(PYTHON) -m src.client.main --id "User_B" --db "client_B.db"
+	PYTHONPATH=$(PWD) $(PYTHON) -m src.client.main --id "User_B" --db "client_B.db" --proxies $(PROXY_LOG_DIR)/known_proxies.txt
 
 # --- RUNNING SERVERS VIA ADMIN TOOL ---
 servers:

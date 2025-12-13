@@ -80,7 +80,7 @@ class ShoppingListStorage:
 
         return sl
 
-    def save_list(self, shop_list, name=None):
+    def save_list(self, shop_list, name=None, not_sent=False):
         self.lock.acquire_write()
         conn = self._get_conn()
         try:
@@ -111,14 +111,15 @@ class ShoppingListStorage:
                     
                     cursor.execute(
                         """
-                        INSERT INTO ShoppingList (uuid, name, crdt, logical_clock) 
-                        VALUES (%s, %s, %s, %s)
-                        ON CONFLICT(uuid) DO UPDATE 
-                        SET crdt=excluded.crdt, 
-                            name=COALESCE(excluded.name, ShoppingList.name),
-                            logical_clock=excluded.logical_clock
+                        INSERT INTO ShoppingList (uuid, name, crdt, logical_clock, notSent)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT(uuid) DO UPDATE
+                        SET crdt = excluded.crdt,
+                            name = COALESCE(excluded.name, ShoppingList.name),
+                            logical_clock = excluded.logical_clock,
+                            notSent = excluded.notSent
                         """,
-                        (list_uuid, name, crdt_blob, shop_list.clock)
+                        (list_uuid, name, crdt_blob, shop_list.clock, not_sent)
                     )
                     cursor.execute("DELETE FROM ShoppingListItem WHERE shopping_list_uuid=%s", (list_uuid,))
                     
@@ -209,3 +210,65 @@ class ShoppingListStorage:
         finally:
             conn.close()
             self.lock.release_read()
+
+    def get_all_not_sent_lists_and_metadata(self):
+        """
+        Returns all not sent shopping lists with full CRDT data and metadata.
+        """
+        self.lock.acquire_read()
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT uuid, name, crdt, logical_clock, notSent
+                    FROM ShoppingList
+                    WHERE notSent = TRUE
+                    """
+                )
+
+                rows = cursor.fetchall()
+                shopping_lists = []
+
+                for row in rows:
+                    uuid, name, crdt_data, logical_clock, not_sent = row
+
+                    if isinstance(crdt_data, str):
+                        crdt_data = json.loads(crdt_data)
+
+                    shopping_list = self._reconstruct_crdt(crdt_data)
+                    shopping_list.uuid = uuid
+                    shopping_list.name = name
+                    shopping_list.clock = logical_clock
+                    shopping_list.notSent = not_sent
+
+                    shopping_lists.append(shopping_list)
+
+                return shopping_lists
+
+        finally:
+            conn.close()
+            self.lock.release_read()
+            
+    def delete_list(self, list_id):
+        self.lock.acquire_write()
+        conn = self._get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "DELETE FROM ShoppingList WHERE uuid=%s",
+                        (list_id,)
+                    )
+                    cursor.execute(
+                        "DELETE FROM ShoppingListItem WHERE shopping_list_uuid=%s",
+                        (list_id,)
+                    )
+            print(f"[Storage] Deleted list with ID: {list_id}")
+        except Exception as e:
+            print(f"[Storage] Error deleting list: {e}")
+            raise e
+        finally:
+            conn.close()
+            self.lock.release_write()
+
