@@ -9,6 +9,7 @@ from src.common.messages.messages import MessageType, Message
 
 SERVER_BASE_PORT = 5555
 PROXY_BASE_PORT = 6000
+PROXY_INCREMENT = 2
 SERVER_LOG_DIR = "src/server/server_logs"
 PROXY_LOG_DIR = "src/proxy/proxy_logs"
 
@@ -45,7 +46,7 @@ def initial_setup():
 
     with open(f"{PROXY_LOG_DIR}/known_proxies.txt", "w") as f:
         for i in range(1, 3):
-            port = PROXY_BASE_PORT + i - 1
+            port = PROXY_BASE_PORT + PROXY_INCREMENT*i - 1
             f.write(f"Proxy_{i}:{port}\n")
 
     # --- 2. START SERVERS AND TRACK PIDS ---
@@ -69,7 +70,7 @@ def initial_setup():
     print("Starting Proxies...")
     with open(PROXY_PIDS_FILE, "w") as pid_w:
         for i in range(1, 3):
-            port = PROXY_BASE_PORT + i - 1
+            port = PROXY_BASE_PORT + PROXY_INCREMENT*i - 1
             proc = subprocess.Popen([
                 sys.executable, "-u", "-m", "src.proxy.main",   
                 "--port", str(port),

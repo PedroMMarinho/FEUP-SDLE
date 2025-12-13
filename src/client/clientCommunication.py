@@ -7,10 +7,14 @@ import random
 class Proxy():
     def __init__(self, port):
         self.port = port
-        self.socket = None
+        self.requestSocket = None
+        self.subscriberSocket = None
 
-    def setSocket(self, socket):
-        self.socket = socket
+    def setRequestSocket(self, socket):
+        self.requestSocket = socket
+
+    def setSubscriberSocket(self, socket):  
+        self.subscriberSocket = socket
 
 
 class ClientCommunicator():
@@ -18,12 +22,11 @@ class ClientCommunicator():
         self.db_path = db_path
         self.known_proxies = known_proxies
         self.context = zmq.Context()
-
+        self.poller = zmq.Poller()
         self.running = True
         self.storage = storage
         self.daemon = True  # Kills this thread if the main app closes
         self.proxies = []
-        self.subscriber = None
         self.init_proxies()
         self.init_subscriber_socket()
 
@@ -33,8 +36,18 @@ class ClientCommunicator():
             self.proxies.append(proxy)
             proxy_socket = self.context.socket(zmq.DEALER)
             proxy_socket.connect(f"tcp://localhost:{port}")
-            proxy.setSocket(proxy_socket)
-    
+
+            subscribe_socket = self.context.socket(zmq.SUB)
+            subscribe_socket.setsockopt_string(zmq.SUBSCRIBE, "")
+            pub_port = port + 1  # convention: PUB = DEALER + 1
+            subscribe_socket.connect(f"tcp://localhost:{pub_port}")
+            self.poller.register(subscribe_socket, zmq.POLLIN)
+            print(f"[Network] Subscribed to proxy PUB {pub_port}")
+
+            proxy.setSubscriberSocket(subscribe_socket)
+            proxy.setRequestSocket(proxy_socket)
+
+
     def init_subscriber_socket(self):
         self.subscriber = self.context.socket(zmq.SUB)
         self.subscriber.setsockopt_string(zmq.SUBSCRIBE, "")
@@ -67,7 +80,9 @@ class ClientCommunicator():
                     raw = self.subscriber.recv()
                     message = Message(json_str=raw)
 
-                    self._handle_incoming_message(message)
+                    if message.msg_type == MessageType.LIST_UPDATE:
+
+                        self._handle_list_update(message.payload)
 
             except zmq.ContextTerminated:
                 break
@@ -262,10 +277,22 @@ class ClientCommunicator():
         return random.choice(self.proxies)
     
     def subscribe_to_list(self, list_uuid):
-        self.subscriber.setsockopt_string(zmq.SUBSCRIBE, list_uuid)
+        for proxy in self.proxies:
+            proxy.subscriberSocket.setsockopt_string(zmq.SUBSCRIBE, list_uuid)
         print(f"[Network] Subscribed to updates for list {list_uuid}")
     
     def unsubscribe_from_list(self, list_uuid):
-        self.subscriber.setsockopt_string(zmq.UNSUBSCRIBE, list_uuid)
+        for proxy in self.proxies:
+            proxy.subscriberSocket.setsockopt_string(zmq.UNSUBSCRIBE, list_uuid)
         print(f"[Network] Unsubscribed from updates for list {list_uuid}")
+
+    def _handle_list_update(self, payload):
+        list_uuid = payload['list_id']
+        crdt_json = payload['shopping_list']
+        print(f"[Network] Received LIST_UPDATE for list {list_uuid}")
+
+        self.storage.save_list(crdt_json)
+
+        print(f"[Network] Merged LIST_UPDATE for list {list_uuid}")
+
 

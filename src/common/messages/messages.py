@@ -20,6 +20,7 @@ class MessageType(Enum):
     REMOVE_SERVER = 16
     REMOVE_SERVER_ACK = 17
     GOSSIP = 18
+    LIST_UPDATE = 19
 
 class Message:
     def __init__(self, msg_type=None, payload=None, json_str=None):
