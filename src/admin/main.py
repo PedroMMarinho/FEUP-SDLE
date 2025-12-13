@@ -108,7 +108,6 @@ def add_server():
 
     proc = subprocess.Popen([
         sys.executable, "-m", "src.server.main",
-        "--id", server_name,
         "--port", str(next_port),
         "--db", f"server_{next_id}",
         "--servers", f"{SERVER_LOG_DIR}/known_servers.txt",

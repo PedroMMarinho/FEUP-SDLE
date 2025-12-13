@@ -153,15 +153,14 @@ class ProxyCommunicator:
 
         # Process Servers
         my_server_ports = {str(s.port) for s in self.servers}
-        my_server_ports.add(str(self.port))
         my_proxy_ports = {str(p.port) for p in self.proxies}
+        my_proxy_ports.add(str(self.port))
 
         print(f"[Gossip] Handling gossip from {identity}: servers={incoming_servers}, proxies={incoming_proxies}, version={hash_ring_version}")
         if hash_ring_version < self.hash_ring_version:
             return # Ignore outdated gossip
         
         if hash_ring_version == self.hash_ring_version:
-            self.hash_ring_version = hash_ring_version
             if set(incoming_servers) == my_server_ports and set(incoming_proxies) == {str(p.port) for p in self.proxies}:
                 return 
             
@@ -176,7 +175,7 @@ class ProxyCommunicator:
                     print(f"[Gossip] Discovered new Proxy: {p}")
                     self.connect_to_proxy(p)
 
-            hash_ring_version += 1
+            self.hash_ring_version += 1
         elif hash_ring_version > self.hash_ring_version:
             print(f"[Gossip] Detected newer hash ring version {hash_ring_version}, updating from {self.hash_ring_version}")
             self.hash_ring_version = hash_ring_version
@@ -248,7 +247,7 @@ class ProxyCommunicator:
         print(f"[ProxyCommunicator] Proxy interface socket bound to port {self.port}")
 
         self.proxy_publish_socket = self.context.socket(zmq.PUB)
-        pub_port = self.port + 1  # convention: PUB = DEALER + 1
+        pub_port = int(self.port) + 1  # convention: PUB = DEALER + 1
         self.proxy_publish_socket.bind(f"tcp://localhost:{pub_port}")
         print(f"[ProxyCommunicator] Proxy publish socket bound to port {pub_port}")
 

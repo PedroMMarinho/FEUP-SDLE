@@ -224,7 +224,6 @@ class ServerCommunicator:
             return # Ignore outdated gossip
         
         if hash_ring_version == self.hash_ring_version:
-            self.hash_ring_version = hash_ring_version
             if set(incoming_servers) == my_server_ports and set(incoming_proxies) == {str(p.port) for p in self.proxies}:
                 return 
 
@@ -238,7 +237,7 @@ class ServerCommunicator:
                 if str(p) not in my_proxy_ports:
                     print(f"[Gossip] Discovered new Proxy: {p}")
                     self.connect_to_proxy(p)
-            hash_ring_version += 1
+            self.hash_ring_version += 1
         elif hash_ring_version > self.hash_ring_version:
             print(f"[Gossip] Detected newer hash ring version {hash_ring_version}, updating from {self.hash_ring_version}")
             self.hash_ring_version = hash_ring_version

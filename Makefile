@@ -59,11 +59,11 @@ servers:
 	mkdir -p $(SERVER_LOG_DIR) $(PROXY_LOG_DIR)
 	PYTHONPATH=$(PWD) $(PYTHON) -m  src.admin.main --action initial_setup
 
-add_server:
+add-server:
 	mkdir -p $(SERVER_LOG_DIR)
 	PYTHONPATH=$(PWD) $(PYTHON) -m src.admin.main --action add_server
 
-remove_server:
+remove-server:
 	@if [ -z "$(SERVER_NAME)" ]; then \
 		echo "ERROR: Please provide SERVER_NAME, e.g. make remove_server SERVER_NAME=Server_3"; \
 		exit 1; \
