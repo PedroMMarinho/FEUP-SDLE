@@ -7,3 +7,4 @@ __pycache__/
 venv/
 client_*.db
 src/server/server_logs/*
+src/proxy/proxy_logs/*

@@ -43,11 +43,11 @@ client2:
 # --- RUNNING SERVERS VIA ADMIN TOOL ---
 servers:
 	mkdir -p $(SERVER_LOG_DIR) $(PROXY_LOG_DIR)
-	PYTHONPATH=$(PWD) $(PYTHON) src.admin.main --action initial_setup
+	PYTHONPATH=$(PWD) $(PYTHON) -m  src.admin.main --action initial_setup
 
 add_server:
 	mkdir -p $(SERVER_LOG_DIR)
-	PYTHONPATH=$(PWD) $(PYTHON) src.admin.main --action add_server
+	PYTHONPATH=$(PWD) $(PYTHON) -m src.admin.main --action add_server
 
 remove_server:
 	@if [ -z "$(SERVER_NAME)" ]; then \
@@ -57,21 +57,22 @@ remove_server:
 	PYTHONPATH=$(PWD) $(PYTHON) src.admin.main --action remove_server --server_name $(SERVER_NAME)
 
 # --- CLEANUP ---
-clean-logs:
+clean-logs: 
 	rm -f $(SERVER_LOG_DIR)/server*.log
 	rm -f $(PROXY_LOG_DIR)/proxy*.log
 	@echo "Server logs cleaned."
 
 stop-servers:
-	@pkill -f "python3 -m src.server.main" || true
-	rm -f $(SERVER_LOG_DIR)/known_servers.txt
-	rm -f $(PROXY_LOG_DIR)/known_proxies.txt
+	@pkill -f "src.server.main" || true
 	@echo "All servers stopped."
 
-clean:
+
+clean-lists:
+	rm -f $(SERVER_LOG_DIR)/known_servers.txt
+	rm -f $(PROXY_LOG_DIR)/known_proxies.txt
+
+clean: clean-logs stop-servers clean-lists
 	find . -type d -name "__pycache__" -exec rm -rf {} +
-	clean-logs
-	stop-servers
 	@echo "Cleanup complete."
 
 help:
