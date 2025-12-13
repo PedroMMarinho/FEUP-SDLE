@@ -68,7 +68,6 @@ def main():
     storage.initialize_schema()
 
     comm = ClientCommunicator(db_config, args.id, known_proxy_ports, storage)
-    comm.start()
 
     ui = ClientInterface(args.id, comm, storage)
     

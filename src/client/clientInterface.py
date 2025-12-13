@@ -2,12 +2,16 @@ import sys
 import uuid
 from src.common.crdt.improved.ShoppingList import ShoppingList 
 from src.client.storage import ShoppingListStorage
+from src.common.threadPool.threadPool import ThreadPool
 
 class ClientInterface:
     def __init__(self, client_id, communicator, storage):
         self.client_id = client_id
         self.communicator = communicator
         self.storage = storage
+        self.thread_pool = ThreadPool(num_threads=4)
+        self.thread_pool.submit(self.communicator.run)
+        self.thread_pool.submit(self.communicator.heartbeat)
 
     def print_help(self):
         print("\n--- COMMANDS ---")
@@ -30,8 +34,8 @@ class ClientInterface:
 
         self.storage.save_list(sl, name)
         print(f"Created list '{name}' with ID: {list_uuid}")
-        
-        self.communicator.send_full_list(sl.uuid, sl.to_json())
+
+        self.thread_pool.submit(self.communicator.send_full_list, sl.uuid, sl.to_json())
         self.communicator.subscribe_to_list(sl.uuid)
 
     def show_lists(self):
@@ -84,7 +88,7 @@ class ClientInterface:
         
         self.storage.save_list(sl)
         print(f"Added '{item_name}' (Need: {qty_needed}) | (Got: {acquired}) to list.")
-        self.communicator.send_full_list(list_id, sl.to_json())
+        self.thread_pool.submit(self.communicator.send_full_list, list_id, sl.to_json())
 
     def update_item(self, list_id, item_name, needed, acquired=None):
         sl = self.storage.get_list_by_id(list_id)
@@ -118,7 +122,7 @@ class ClientInterface:
 
         self.storage.save_list(sl)
         print(f"Updated '{item_name}' -> Need: {target_needed}, Got: {target_acquired}")
-        self.communicator.send_full_list(list_id, sl.to_json())
+        self.thread_pool.submit(self.communicator.send_full_list, list_id, sl.to_json())
 
     def delete_item(self, list_id, item_name):
         sl = self.storage.get_list_by_id(list_id)
@@ -130,7 +134,7 @@ class ClientInterface:
 
         self.storage.save_list(sl)
         print(f"Deleted '{item_name}'.")
-        self.communicator.send_full_list(list_id, sl.to_json())
+        self.thread_pool.submit(self.communicator.send_full_list, list_id, sl.to_json())
 
     def delete_list (self, list_id):
         self.storage.delete_list(list_id)

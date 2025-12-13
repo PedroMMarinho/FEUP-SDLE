@@ -1,9 +1,7 @@
-import threading
 import pyzmq
 import time
 from common.crdt.improved.ShoppingList import ShoppingList
 from src.common.messages.messages import Message, MessageType
-from src.common.threadPool.threadPool import ThreadPool
 import random
 
 class Proxy():
@@ -15,9 +13,8 @@ class Proxy():
         self.socket = socket
 
 
-class ClientCommunicator(threading.Thread):
+class ClientCommunicator():
     def __init__(self, db_path, client_id, known_proxies, storage):
-        threading.Thread.__init__(self)
         self.db_path = db_path
         self.client_id = client_id
         self.known_proxies = known_proxies
@@ -26,7 +23,6 @@ class ClientCommunicator(threading.Thread):
         self.running = True
         self.storage = storage
         self.daemon = True  # Kills this thread if the main app closes
-        self.thread_pool = ThreadPool(num_threads=4)
         self.proxies = []
         self.subscriber = None
         self.init_proxies()
@@ -110,6 +106,9 @@ class ClientCommunicator(threading.Thread):
                 if reply.msg_type == MessageType.SENT_FULL_LIST_ACK:
                     print(f"[Network] ACK received from proxy {proxy.port}")
                     return True
+                if reply.msg_type == MessageType.SENT_FULL_LIST_NACK:
+                    print(f"[Network] NACK received from proxy {proxy.port}: {reply.payload['error']}")
+                    return False
                 else:
                     print(
                         f"[Network] Unexpected reply from {proxy.port}: "
@@ -196,12 +195,13 @@ class ClientCommunicator(threading.Thread):
 
                 if reply.msg_type == MessageType.SENT_FULL_LIST_ACK:
                     print(f"[Network] Full list received from proxy {proxy.port}")
-                    return reply.payload
+                    return reply.payload    
 
-                print(
-                    f"[Network] Unexpected reply from {proxy.port}: "
-                    f"{reply.msg_type}"
-                )
+                if reply.msg_type == MessageType.SENT_FULL_LIST_NACK:
+                    print(f"[Network] Error received from proxy {proxy.port}: {reply.payload['error']}")
+                    return None
+
+
             else:
                 print(f"[Network] No reply from {proxy.port}, retrying...")
 
