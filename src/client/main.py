@@ -60,14 +60,15 @@ def main():
                     line = line.strip()
                     if line:
                         name, port_str = line.split(":")
-                        known_proxy_ports.append(port_str)
+                        port_int = int(port_str)
+                        known_proxy_ports.append(port_int)
         except Exception as e:
             print(f"[Warning] Could not read known proxies file: {e}")
 
     storage = ShoppingListStorage(db_config)
     storage.initialize_schema()
 
-    comm = ClientCommunicator(db_config, args.id, known_proxy_ports, storage)
+    comm = ClientCommunicator(db_config, known_proxy_ports, storage)
 
     ui = ClientInterface(args.id, comm, storage)
     

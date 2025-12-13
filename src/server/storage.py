@@ -4,13 +4,13 @@ from psycopg2 import DataError
 import json
 
 from src.common.crdt.improved.ShoppingList import ShoppingList, PNCounter, ORSet
-import src.common.readWriteLock as ReadWriteLock
+from src.common.readWriteLock.read_write_lock import ReadWriteLock
 
 
 class ShoppingListStorage:
     def __init__(self, db_config):
         self.db_config = db_config
-        self.lock = ReadWriteLock.ReadWriteLock()
+        self.lock = ReadWriteLock()
 
         try:
             conn = self._get_conn()
@@ -42,7 +42,7 @@ class ShoppingListStorage:
 
     def _reconstruct_crdt(self, data):
         """Mirror of the client's reconstruction logic."""
-        sl = ShoppingList(list_id=data['id'])
+        sl = ShoppingList(list_uuid=data['uuid'])
         sl.clock = data.get('clock', 0)
 
         if 'uuid' in data:
@@ -286,3 +286,15 @@ class ShoppingListStorage:
         finally:
             conn.close()
             self.lock.release_write()
+    
+    def initialize_schema(self):
+        """Creates tables if they don't exist."""
+        conn = self._get_conn()
+        try:
+            with conn:
+                with open('src/server/db.sql', 'r') as f:
+                    with conn.cursor() as cur:
+                        cur.execute(f.read())
+                print("[Storage] Schema initialized.")
+        finally:
+            conn.close()

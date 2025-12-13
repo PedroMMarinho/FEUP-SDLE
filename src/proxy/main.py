@@ -47,7 +47,7 @@ def main():
         print(f"[System] Known proxy: {name} at port {port}")
 
 
-    comm = ProxyCommunicator(args.port, args.seed, known_server_ports, known_proxy_ports) 
+    comm = ProxyCommunicator(args.port, known_server_ports, known_proxy_ports) 
     comm.start()
 
 

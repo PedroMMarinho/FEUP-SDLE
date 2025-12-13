@@ -14,9 +14,8 @@ class Proxy():
 
 
 class ClientCommunicator():
-    def __init__(self, db_path, client_id, known_proxies, storage):
+    def __init__(self, db_path, known_proxies, storage):
         self.db_path = db_path
-        self.client_id = client_id
         self.known_proxies = known_proxies
         self.context = zmq.Context()
 
@@ -128,17 +127,17 @@ class ClientCommunicator():
         Sends a full list to proxies with retries and proxy failover.
         """
 
-        list_id = shopping_list.uuid
+        list_uuid = shopping_list.uuid
 
         message = Message(
             msg_type=MessageType.SENT_FULL_LIST,
             payload={
-                "list_id": list_id,
+                "list_id": list_uuid,
                 "shopping_list": shopping_list.to_json()
             }
         )
 
-        print(f"[Network] Sending full list '{list_id}' to proxies")
+        print(f"[Network] Sending full list '{list_uuid}' to proxies")
 
         # Shuffle proxies so load is distributed
         proxies = self.proxies[:]
@@ -151,7 +150,7 @@ class ClientCommunicator():
 
             if success:
                 print(
-                    f"[Network] Full list '{list_id}' successfully sent "
+                    f"[Network] Full list '{list_uuid}' successfully sent "
                     f"via proxy {proxy.port}"
                 )
 
@@ -162,7 +161,7 @@ class ClientCommunicator():
             print(f"[Network] Switching proxy...")
 
         print(
-            f"[Network] FAILED: Could not send full list '{list_id}' "
+            f"[Network] FAILED: Could not send full list '{list_uuid}' "
             f"to any proxy"
         )
         self.storage.save_list(shopping_list, not_sent=True)
@@ -178,10 +177,10 @@ class ClientCommunicator():
         poller.register(socket, zmq.POLLIN)
 
         timeout = base_timeout
-
+        # TODO IS THE PLAYLOAD'list_uuid'?
         for attempt in range(1, retries + 1):
             print(
-                f"[Network] Requesting FULL_LIST '{message.payload['list_id']}' "
+                f"[Network] Requesting FULL_LIST '{message.payload['list_uuid']}' "
                 f"from proxy {proxy.port} "
                 f"(attempt {attempt}/{retries})"
             )
@@ -211,17 +210,17 @@ class ClientCommunicator():
         return None
 
     
-    def request_full_list(self, list_id):
+    def request_full_list(self, list_uuid):
         """
         Requests a full shopping list from proxies with retries and failover.
         Returns the CRDT payload on success, None on failure.
         """
         message = Message(
             msg_type=MessageType.REQUEST_FULL_LIST,
-            payload={"list_id": list_id}
+            payload={"list_uuid": list_uuid}
         )
 
-        print(f"[Network] Requesting full list '{list_id}'")
+        print(f"[Network] Requesting full list '{list_uuid}'")
 
         proxies = self.proxies[:]
         random.shuffle(proxies)
@@ -233,18 +232,18 @@ class ClientCommunicator():
 
             if result is not None:
                 print(
-                    f"[Network] Full list '{list_id}' received "
+                    f"[Network] Full list '{list_uuid}' received "
                     f"via proxy {proxy.port}"
                 )
 
                 self.storage.save_list(ShoppingList.from_json(result), not_sent=False)
-                self.subscribe_to_list(list_id)
+                self.subscribe_to_list(list_uuid)
                 return 
 
             print(f"[Network] Switching proxy...")
 
         print(
-            f"[Network] FAILED: Could not retrieve full list '{list_id}' "
+            f"[Network] FAILED: Could not retrieve full list '{list_uuid}' "
             f"from any proxy"
         )
         return None
@@ -262,11 +261,11 @@ class ClientCommunicator():
         # For now, just return the default proxy address
         return random.choice(self.proxies)
     
-    def subscribe_to_list(self, list_id):
-        self.subscriber.setsockopt_string(zmq.SUBSCRIBE, list_id)
-        print(f"[Network] Subscribed to updates for list {list_id}")
+    def subscribe_to_list(self, list_uuid):
+        self.subscriber.setsockopt_string(zmq.SUBSCRIBE, list_uuid)
+        print(f"[Network] Subscribed to updates for list {list_uuid}")
     
-    def unsubscribe_from_list(self, list_id):
-        self.subscriber.setsockopt_string(zmq.UNSUBSCRIBE, list_id)
-        print(f"[Network] Unsubscribed from updates for list {list_id}")
+    def unsubscribe_from_list(self, list_uuid):
+        self.subscriber.setsockopt_string(zmq.UNSUBSCRIBE, list_uuid)
+        print(f"[Network] Unsubscribed from updates for list {list_uuid}")
 

@@ -6,10 +6,22 @@ DB_PASSWORD = password
 DB_PORT = 5432
 SERVER_LOG_DIR = $(SRC_DIR)/server/server_logs
 PROXY_LOG_DIR = $(SRC_DIR)/proxy/proxy_logs
+ID ?= User_Default
 
 all: help
 
 # --- SETUP & INFRASTRUCTURE ---
+init: db servers
+	@echo "--------------------------------------------------"
+	@echo "System Initialized Successfully!"
+	@echo "  1. Dependencies installed."
+	@echo "  2. Database running."
+	@echo "  3. Servers & Proxies started."
+	@echo ""
+	@echo "You can now run clients:"
+	@echo "  make client ID=User_A"
+	@echo "--------------------------------------------------"
+
 
 install:
 	pip install -r requirements.txt
@@ -34,11 +46,13 @@ clean-db: stop-db
 	@echo "Database container removed."
 
 # --- RUNNING CLIENTS ---
-client1:
-	PYTHONPATH=$(PWD) $(PYTHON) -m src.client.main --id "User_A" --db "client_A.db" --proxies $(PROXY_LOG_DIR)/known_proxies.txt
+# Usage: make client ID=User_A
 
-client2:
-	PYTHONPATH=$(PWD) $(PYTHON) -m src.client.main --id "User_B" --db "client_B.db" --proxies $(PROXY_LOG_DIR)/known_proxies.txt
+client:
+	PYTHONPATH=$(PWD) $(PYTHON) -m src.client.main \
+		--id "$(ID)" \
+		--db "client_$(ID).db" \
+		--proxies $(PROXY_LOG_DIR)/known_proxies.txt
 
 # --- RUNNING SERVERS VIA ADMIN TOOL ---
 servers:
@@ -63,16 +77,24 @@ clean-logs:
 	@echo "Server logs cleaned."
 
 stop-servers:
-	@pkill -f "src.server.main" || true
-	@echo "All servers stopped."
-
+	@echo "Stopping servers and proxies..."
+	@if [ -f src/server/server_logs/server_pids.txt ]; then \
+        echo "Killing Servers..."; \
+        xargs kill < src/server/server_logs/server_pids.txt 2>/dev/null || true; \
+        rm src/server/server_logs/server_pids.txt; \
+	fi
+	@if [ -f src/proxy/proxy_logs/proxy_pids.txt ]; then \
+        echo "Killing Proxies..."; \
+        xargs kill < src/proxy/proxy_logs/proxy_pids.txt 2>/dev/null || true; \
+        rm src/proxy/proxy_logs/proxy_pids.txt; \
+	fi
+	@echo "All background processes stopped."
 
 clean-lists:
 	rm -f $(SERVER_LOG_DIR)/known_servers.txt
 	rm -f $(PROXY_LOG_DIR)/known_proxies.txt
 
-clean: clean-logs stop-servers clean-lists
-	find . -type d -name "__pycache__" -exec rm -rf {} +
+clean: clean-logs stop-servers clean-lists clean-db
 	@echo "Cleanup complete."
 
 help:

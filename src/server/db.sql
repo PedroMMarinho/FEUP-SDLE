@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS ShoppingList (
     name TEXT NOT NULL,
     crdt JSONB NOT NULL,
     logical_clock INTEGER DEFAULT 0,
-    isReplica BOOLEAN NOT NULL, -- whether this is a replica of a list from another server
+    isReplica BOOLEAN NOT NULL -- whether this is a replica of a list from another server
 );
 
 CREATE TABLE IF NOT EXISTS ShoppingListItem (
