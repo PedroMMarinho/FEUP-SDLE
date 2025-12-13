@@ -5,7 +5,4 @@ Server removal
 
 Fixes needed: 
 
-i think server_config_update might need to lock all other handlers to maintain consistency
-CHECK LOCKS 
-in list request read from main + replicas (instead of just any )
 

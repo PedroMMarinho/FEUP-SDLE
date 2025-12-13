@@ -1,12 +1,16 @@
+import zmq
 import pyzmq
 from src.common.threadPool.threadPool import ThreadPool
 from src.common.messages.messages import Message, MessageType
 import hashlib
 import random
 import time
+import src.common.crdt.improved.ShoppingList as ShoppingList
 
 GOSSIP_FANOUT = 2
 GOSSIP_INTERVAL = 0.5
+NEXT_NUMBER = 5
+SUCCESSFUL_READS = 2
 
 class Server():
     def __init__(self, port, hash):
@@ -212,8 +216,240 @@ class ProxyCommunicator:
         match message.msg_type:
             case MessageType.GOSSIP:
                 self.thread_pool.submit(self.handle_gossip, identity, message.payload)
+            case MessageType.REQUEST_FULL_LIST:
+                self.thread_pool.submit(self.handle_request_full_list, identity, message.payload)
+            case MessageType.SENT_FULL_LIST:
+                self.thread_pool.submit(self.handle_sent_full_list, identity, message.payload)
             case _:
                 print(f"[Network] Unknown message type: {message.msg_type}")
+
+
+    def _try_send_full_list_to_server(self, server, list_id, shopping_list, retries=3, base_timeout=1000):
+        message = Message(
+            msg_type=MessageType.SENT_FULL_LIST,
+            payload={
+                "list_id": list_id,
+                "shopping_list": shopping_list
+            }
+        )
+
+
+        # Connect or reuse socket
+        if server.socket is None:
+            sock = self.context.socket(pyzmq.DEALER)
+            sock.connect(f"tcp://localhost:{server.port}")
+            server.setSocket(sock)
+        else:
+            sock = server.socket
+
+        poller = pyzmq.Poller()
+        poller.register(sock, pyzmq.POLLIN)
+
+        timeout = base_timeout
+
+        for attempt in range(1, retries + 1):
+            print(
+                f"[Proxy] Sending FULL_LIST {list_id} → server {server.port} "
+                f"(attempt {attempt}/{retries})"
+            )
+
+            sock.send(message.serialize())
+
+            socks = dict(poller.poll(timeout))
+
+            if sock in socks:
+                reply = Message(json_str=sock.recv())
+
+                if reply.msg_type == MessageType.SENT_FULL_LIST_ACK:
+                    print(f"[Proxy] ACK from server {server.port}")
+                    return True
+
+                print(f"[Proxy] Unexpected reply {reply.msg_type}")
+
+            else:
+                print(f"[Proxy] Timeout waiting for {server.port}")
+
+            timeout = min(8000, timeout * 2)
+
+        return False
+
+
+    def handle_sent_full_list(self, identity, payload):
+        list_id = payload.get("list_id")
+        shopping_list = payload.get("shopping_list")
+
+        print(
+            f"[Proxy] Received FULL_LIST {list_id} from client {identity}"
+        )
+
+        if not self.servers:
+            print("[Proxy] No servers available")
+            return
+
+        key_hash = hashlib.sha256(list_id.encode()).hexdigest()
+
+        # Sort servers by hash ONLY for this request
+        servers = sorted(self.servers, key=lambda s: s.hash)
+
+        # Find first server clockwise on the ring
+        start_index = None
+        for i, server in enumerate(servers):
+            if key_hash <= server.hash:
+                start_index = i
+                break
+
+        if start_index is None:
+            start_index = 0  # wrap around
+
+        num_servers = len(servers)
+
+        # Walk the ring until success or full loop
+        for offset in range(num_servers):
+            server = servers[(start_index + offset) % num_servers]
+
+            success = self._try_send_full_list_to_server(
+                server,
+                list_id,
+                shopping_list
+            )
+
+            if success:
+                print(
+                    f"[Proxy] FULL_LIST {list_id} stored on server {server.port}"
+                )
+
+                message = Message(
+                    msg_type=MessageType.SENT_FULL_LIST_ACK,
+                    payload={}
+                )
+                self.proxy_interface_socket.send_multipart(
+                    [identity, message.serialize()]
+                )
+                return
+
+            print(
+                f"[Proxy] Server {server.port} failed, trying next"
+            )
+
+        print(
+            f"[Proxy] FAILED: FULL_LIST {list_id} "
+            f"after full ring traversal"
+        )
+        # All servers failed
+        nack_message = Message(
+            msg_type=MessageType.SENT_FULL_LIST_NACK,
+            payload={}
+        )
+        self.proxy_interface_socket.send_multipart(
+            [identity, nack_message.serialize()]
+        )
+
+    def _try_request_full_list_from_server(self, server, list_id, retries=3, timeout=1000):
+        message = Message(
+            msg_type=MessageType.REQUEST_FULL_LIST,
+            payload={"list_id": list_id}
+        )
+
+        if server.socket is None:
+            sock = self.context.socket(pyzmq.DEALER)
+            sock.connect(f"tcp://localhost:{server.port}")
+            server.setSocket(sock)
+        else:
+            sock = server.socket
+
+        poller = pyzmq.Poller()
+        poller.register(sock, pyzmq.POLLIN)
+
+        for attempt in range(1, retries + 1):
+            sock.send(message.serialize())
+            socks = dict(poller.poll(timeout))
+
+            if sock in socks:
+                reply = Message(json_str=sock.recv())
+                if reply.msg_type == MessageType.REQUEST_FULL_LIST_ACK:
+                    return reply.payload  # CRDT dict
+                elif reply.msg_type == MessageType.REQUEST_FULL_LIST_NACK:
+                    return None
+
+            timeout = min(8000, timeout * 2)
+
+        return None
+
+
+    def handle_request_full_list(self, identity, payload):
+        list_id = payload.get("list_id")
+        if not list_id:
+            print("[Proxy] Missing list_id in request")
+            return
+
+        print(f"[Proxy] Client {identity} requested full list {list_id}")
+
+        if not self.servers:
+            print("[Proxy] No servers available")
+            nack = Message(msg_type=MessageType.REQUEST_FULL_LIST_NACK, payload={"list_id": list_id})
+            self.proxy_interface_socket.send_multipart([identity, nack.serialize()])
+            return
+
+        # Calculate hash for primary server position
+        key_hash = hashlib.sha256(list_id.encode()).hexdigest()
+        servers = sorted(self.servers, key=lambda s: s.hash)
+        start_index = next((i for i, s in enumerate(servers) if key_hash <= s.hash), 0)
+        num_servers = len(servers)
+
+        collected_crdts = []
+        servers_tried = 0
+        successful = 0
+
+        # Try up to NEXT_NUMBER servers
+        for offset in range(num_servers):
+            if servers_tried >= NEXT_NUMBER:
+                break
+            if successful >= SUCCESSFUL_READS:
+                break
+
+            server = servers[(start_index + offset) % num_servers]
+            servers_tried += 1
+
+            crdt_payload = self._try_request_full_list_from_server(server, list_id)
+            if crdt_payload is not None:
+                collected_crdts.append(crdt_payload)
+                successful += 1
+            else:
+                print(f"[Proxy] Server {server.port} has no list {list_id}")
+
+        if successful < SUCCESSFUL_READS:
+            # All servers failed → send NACK to client
+            nack = Message(msg_type=MessageType.REQUEST_FULL_LIST_NACK, payload={"list_id": list_id})
+            self.proxy_interface_socket.send_multipart([identity, nack.serialize()])
+            print(f"[Proxy] Full list {list_id} not found on any server")
+            return
+
+        # Merge all CRDTs
+        merged_list = ShoppingList.from_dict(collected_crdts[0])
+        for crdt in collected_crdts[1:]:
+            # Assuming ShoppingList.merge_dict exists or implement merge here
+            merged_list = ShoppingList.merge(merged_list, ShoppingList.from_dict(crdt))
+
+        merged_list = merged_list.to_dict()
+
+        # Send ACK with merged list to client
+        ack = Message(
+            msg_type=MessageType.REQUEST_FULL_LIST_ACK,
+            payload={"list_id": list_id, "shopping_list": merged_list}
+        )
+        self.proxy_interface_socket.send_multipart([identity, ack.serialize()])
+        print(f"[Proxy] Sent merged full list {list_id} to client {identity}")
+
+
+
+
+
+
+
+        
+
+
+
 
 
 
