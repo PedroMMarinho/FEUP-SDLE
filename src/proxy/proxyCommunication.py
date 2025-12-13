@@ -95,8 +95,10 @@ class ProxyCommunicator:
             "servers": current_server_ports,
             "hash_ring_version": self.hash_ring_version
         }
-        
-        message = Message(msg_type=MessageType.GOSSIP, payload=payload)
+        if self.hash_ring_version == 1: 
+            message = Message(msg_type=MessageType.GOSSIP_INTRODUCTION, payload=payload)
+        else:   
+            message = Message(msg_type=MessageType.GOSSIP, payload=payload)
         serialized_msg = message.serialize()
 
         targets = []
@@ -272,6 +274,8 @@ class ProxyCommunicator:
         match message.msg_type:
             case MessageType.GOSSIP:
                 self.thread_pool.submit(self.handle_gossip, identity, message.payload)
+            case MessageType.GOSSIP_INTRODUCTION:
+                self.thread_pool.submit(self.handle_gossip_introduction, identity, message.payload)
             case MessageType.REQUEST_FULL_LIST:
                 self.thread_pool.submit(self.handle_request_full_list, identity, message.payload)
             case MessageType.SENT_FULL_LIST:
@@ -505,6 +509,39 @@ class ProxyCommunicator:
         )
         self.proxy_interface_socket.send_multipart([identity, ack.serialize()])
         print(f"[Proxy] Sent merged full list {list_id} to client {identity}")
+
+    def handle_gossip_introduction(self, identity, payload):
+        incoming_servers = payload.get("servers", [])
+        incoming_proxies = payload.get("proxies", [])
+        hash_ring_version = payload.get("hash_ring_version", 1)
+
+        # Process Servers
+        my_server_ports = {str(s.port) for s in self.servers}
+        my_proxy_ports = {str(p.port) for p in self.proxies}
+        my_proxy_ports.add(str(self.port))
+
+        # always merge introductions
+        print(f"[Gossip] Handling gossip introduction from {identity}: servers={incoming_servers},proxies={incoming_proxies}, version={hash_ring_version}")
+        changed = False
+        for p in incoming_servers:
+            if str(p) not in my_server_ports:
+                print(f"[Gossip] Discovered new Server: {p}")
+                self.connect_to_server(p)
+                changed = True
+        for p in incoming_proxies:
+            if str(p) not in my_proxy_ports:
+                print(f"[Gossip] Discovered new Proxy: {p}")
+                self.connect_to_proxy(p)
+                changed = True
+
+        if changed:
+            self.hash_ring_version = max(self.hash_ring_version, hash_ring_version) + 1
+
+        
+        
+
+
+        
 
 
 
