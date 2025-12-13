@@ -41,13 +41,14 @@ class ProxyCommunicator:
         self.running = True
 
         self.proxy_interface_socket = None  
+        self.proxy_publish_socket = None
         self.proxies = []
         self.servers = []
         self.hash_ring_version = 1 
 
     def start(self):
         print(f"[ProxyCommunicator] Starting proxy on port {self.port}")
-        self.setup_proxy_interface_socket()
+        self.setup_proxy_interface_sockets()
 
         self.setup_proxy()
         self.setup_server()
@@ -240,11 +241,16 @@ class ProxyCommunicator:
 
 
 
-    def setup_proxy_interface_socket(self):
+    def setup_proxy_interface_sockets(self):
         self.proxy_interface_socket = self.context.socket(zmq.ROUTER)
         self.proxy_interface_socket.bind(f"tcp://localhost:{self.port}")
         self.poller.register(self.proxy_interface_socket, zmq.POLLIN)
         print(f"[ProxyCommunicator] Proxy interface socket bound to port {self.port}")
+
+        self.proxy_publish_socket = self.context.socket(zmq.PUB)
+        pub_port = self.port + 1  # convention: PUB = DEALER + 1
+        self.proxy_publish_socket.bind(f"tcp://localhost:{pub_port}")
+        print(f"[ProxyCommunicator] Proxy publish socket bound to port {pub_port}")
 
     def loop(self):
         print("[ProxyCommunicator] Entering main server loop...")
@@ -375,6 +381,16 @@ class ProxyCommunicator:
                 )
                 self.proxy_interface_socket.send_multipart(
                     [identity, message.serialize()]
+                )
+
+                self.proxy_publish_socket.send_multipart(
+                    [list_id.encode('utf-8'), Message(
+                        msg_type=MessageType.LIST_UPDATE,
+                        payload={
+                            "list_id": list_id,
+                            "shopping_list": shopping_list
+                        }
+                    ).serialize()]
                 )
                 return
 
