@@ -176,8 +176,7 @@ class ProxyCommunicator:
                     self.connect_to_proxy(p)
 
             hash_ring_version += 1
-
-        if hash_ring_version > self.hash_ring_version:
+        elif hash_ring_version > self.hash_ring_version:
             print(f"[Gossip] Detected newer hash ring version {hash_ring_version}, updating from {self.hash_ring_version}")
             self.hash_ring_version = hash_ring_version
 
@@ -244,6 +243,7 @@ class ProxyCommunicator:
     def setup_proxy_interface_socket(self):
         self.proxy_interface_socket = self.context.socket(zmq.ROUTER)
         self.proxy_interface_socket.bind(f"tcp://localhost:{self.port}")
+        self.poller.register(self.proxy_interface_socket, zmq.POLLIN)
         print(f"[ProxyCommunicator] Proxy interface socket bound to port {self.port}")
 
     def loop(self):

@@ -239,8 +239,7 @@ class ServerCommunicator:
                     print(f"[Gossip] Discovered new Proxy: {p}")
                     self.connect_to_proxy(p)
             hash_ring_version += 1
-
-        if hash_ring_version > self.hash_ring_version:
+        elif hash_ring_version > self.hash_ring_version:
             print(f"[Gossip] Detected newer hash ring version {hash_ring_version}, updating from {self.hash_ring_version}")
             self.hash_ring_version = hash_ring_version
 
