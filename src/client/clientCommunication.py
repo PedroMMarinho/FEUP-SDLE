@@ -207,11 +207,11 @@ class ClientCommunicator():
             if socket in socks and socks[socket] == zmq.POLLIN:
                 reply = Message(json_str=socket.recv())
 
-                if reply.msg_type == MessageType.SENT_FULL_LIST_ACK:
+                if reply.msg_type == MessageType.REQUEST_FULL_LIST_ACK:
                     print(f"[Network] Full list received from proxy {proxy.port}")
                     return reply.payload    
 
-                if reply.msg_type == MessageType.SENT_FULL_LIST_NACK:
+                if reply.msg_type == MessageType.REQUEST_FULL_LIST_NACK:
                     print(f"[Network] Error received from proxy {proxy.port}: {reply.payload['error']}")
                     return None
 

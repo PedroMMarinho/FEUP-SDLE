@@ -322,7 +322,7 @@ class ProxyCommunicator:
 
                 if reply.msg_type == MessageType.SENT_FULL_LIST_ACK:
                     print(f"[Proxy] ACK from server {server.port}")
-                    return True
+                    return reply.payload
 
                 print(f"[Proxy] Unexpected reply {reply.msg_type}")
 
@@ -331,7 +331,7 @@ class ProxyCommunicator:
 
             timeout = min(8000, timeout * 2)
 
-        return False
+        return None
 
 
     def handle_sent_full_list(self, identity, payload):
@@ -367,13 +367,13 @@ class ProxyCommunicator:
         for offset in range(num_servers):
             server = servers[(start_index + offset) % num_servers]
 
-            success = self._try_send_full_list_to_server(
+            result = self._try_send_full_list_to_server(
                 server,
                 list_id,
                 shopping_list
             )
 
-            if success:
+            if result:
                 print(
                     f"[Proxy] FULL_LIST {list_id} stored on server {server.port}"
                 )
@@ -390,8 +390,8 @@ class ProxyCommunicator:
                     [list_id.encode('utf-8'), Message(
                         msg_type=MessageType.LIST_UPDATE,
                         payload={
-                            "list_id": list_id,
-                            "shopping_list": shopping_list
+                            "list_id": result['list_id'],
+                            "shopping_list": result['shopping_list']
                         }
                     ).serialize()]
                 )
