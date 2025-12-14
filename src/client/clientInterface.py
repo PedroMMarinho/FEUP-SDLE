@@ -28,7 +28,7 @@ class ClientInterface:
     def create_list(self, name):
         list_uuid = str(uuid.uuid4())
         
-        sl = ShoppingList(list_uuid)
+        sl = ShoppingList(list_uuid, name)
 
         self.storage.save_list(sl, name)
         print(f"Created list '{name}' with ID: {list_uuid}")
@@ -84,7 +84,7 @@ class ClientInterface:
 
         sl.add_item(name=item_name, needed_amount=qty_needed, acquired_amount=acquired)
         
-        self.storage.save_list(sl)
+        self.storage.save_list(sl,sl.name)
         print(f"Added '{item_name}' (Need: {qty_needed}) | (Got: {acquired}) to list.")
         self.thread_pool.submit(self.communicator.send_full_list, sl)
 
@@ -118,7 +118,7 @@ class ClientInterface:
         if diff_acquired != 0:
             sl.update_acquired(item_name, diff_acquired)
 
-        self.storage.save_list(sl)
+        self.storage.save_list(sl, sl.name)
         print(f"Updated '{item_name}' -> Need: {target_needed}, Got: {target_acquired}")
         self.thread_pool.submit(self.communicator.send_full_list, sl)
 
@@ -130,7 +130,7 @@ class ClientInterface:
 
         sl.remove_item(item_name)
 
-        self.storage.save_list(sl)
+        self.storage.save_list(sl, sl.name)
         print(f"Deleted '{item_name}'.")
         self.thread_pool.submit(self.communicator.send_full_list, sl)
 

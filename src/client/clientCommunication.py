@@ -37,7 +37,6 @@ class ClientCommunicator():
             proxy_socket.connect(f"tcp://localhost:{port}")
 
             subscribe_socket = self.context.socket(zmq.SUB)
-            subscribe_socket.setsockopt_string(zmq.SUBSCRIBE, "")
             pub_port = port + 1  # convention: PUB = DEALER + 1
             subscribe_socket.connect(f"tcp://localhost:{pub_port}")
             self.poller.register(subscribe_socket, zmq.POLLIN)
@@ -49,7 +48,6 @@ class ClientCommunicator():
 
     def init_subscriber_socket(self):
         self.subscriber = self.context.socket(zmq.SUB)
-        self.subscriber.setsockopt_string(zmq.SUBSCRIBE, "")
 
         for proxy in self.proxies:
             pub_port = proxy.port + 1  # convention: PUB = DEALER + 1
@@ -166,8 +164,8 @@ class ClientCommunicator():
                     f"[Network] Full list '{list_uuid}' successfully sent "
                     f"via proxy {proxy.port}"
                 )
-
-                self.storage.save_list(ShoppingList.from_json(result["shopping_list"]), not_sent=False)
+                crdt_obj = ShoppingList.from_json(result["shopping_list"])
+                self.storage.save_list(crdt_obj, not_sent=False, name=crdt_obj.name)
                 return
 
             print(f"[Network] Switching proxy...")
@@ -176,14 +174,14 @@ class ClientCommunicator():
             f"[Network] FAILED: Could not send full list '{list_uuid}' "
             f"to any proxy"
         )
-        self.storage.save_list(shopping_list, not_sent=True)
+        self.storage.save_list(shopping_list, not_sent=True, name=shopping_list.name)
     
     def _try_request_full_list_from_proxy(self,proxy,message,retries=3,base_timeout=1000):
         """
         Request a full shopping list from a single proxy with retries.
         Returns the CRDT payload on success, None on failure.
         """
-        socket = proxy.socket
+        socket = proxy.requestSocket
         poller = zmq.Poller()
         poller.register(socket, zmq.POLLIN)
 
@@ -246,8 +244,8 @@ class ClientCommunicator():
                     f"[Network] Full list '{list_uuid}' received "
                     f"via proxy {proxy.port}"
                 )
-
-                self.storage.save_list(ShoppingList.from_json(result["shopping_list"]), not_sent=False)
+                crdt = ShoppingList.from_json(result["shopping_list"])
+                self.storage.save_list(crdt, not_sent=False, name=crdt.name)
                 self.subscribe_to_list(list_uuid)
                 return 
 
@@ -287,7 +285,7 @@ class ClientCommunicator():
         crdt_json_obj = ShoppingList.from_json(crdt_json)
         print(f"[Network] Received LIST_UPDATE for list {crdt_json_obj.uuid}")
 
-        self.storage.save_list(crdt_json_obj)
+        self.storage.save_list(crdt_json_obj, name=crdt_json_obj.name)
 
         print(f"[Network] Merged LIST_UPDATE for list {crdt_json_obj.uuid} into local storage")
 

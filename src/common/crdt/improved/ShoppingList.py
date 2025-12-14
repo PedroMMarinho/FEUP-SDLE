@@ -3,9 +3,10 @@ from src.common.crdt.improved.ORSet import ORSet
 import json
 
 class ShoppingList:
-    def __init__(self, list_uuid):
+    def __init__(self, list_uuid,name=None):
         self.uuid = list_uuid        
-        self.clock = 0            
+        self.clock = 0
+        self.name = name            
         self.items = {} 
 
     def _tick(self):
@@ -108,7 +109,7 @@ class ShoppingList:
                 return data
         
         data = json.loads(json_str)
-        sl = ShoppingList(list_uuid=data['uuid'])
+        sl = ShoppingList(list_uuid=data['uuid'], name=data.get('name'))
         sl.clock = data['clock']
         
         for name, item_data in data.get('items', {}).items():

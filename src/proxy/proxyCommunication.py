@@ -308,7 +308,7 @@ class ProxyCommunicator:
 
         for attempt in range(1, retries + 1):
             print(
-                f"[Proxy] Sending FULL_LIST {shopping_list_obj.uuid} → server {server.port} "
+                f"[Proxy] Sending FULL_LIST {shopping_list_obj.to_json()} → server {server.port} "
                 f"(attempt {attempt}/{retries})"
             )
 
@@ -480,6 +480,7 @@ class ProxyCommunicator:
 
             crdt_payload = crdt_payload.get("shopping_list") if crdt_payload else None
             if crdt_payload is not None:
+                print(f"[Proxy] Received full list from server {server.port}: {crdt_payload}")
                 collected_crdts.append(crdt_payload)
                 successful += 1
             else:
@@ -494,9 +495,13 @@ class ProxyCommunicator:
 
         # Merge all CRDTs
         merged_list = ShoppingList.from_json(collected_crdts[0])
+        print(f"[Proxy] Initial Merged list: {merged_list}")
+
         for crdt in collected_crdts[1:]:
+            print(f"[Proxy] Merging with CRDT: {crdt}")
             # Assuming ShoppingList.merge_dict exists or implement merge here
-            merged_list = ShoppingList.merge(merged_list, ShoppingList.from_json(crdt))
+            merged_list.merge(ShoppingList.from_json(crdt))
+            print(f"[Proxy] Merged list: {merged_list}")
 
         merged_list = merged_list.to_json()
 

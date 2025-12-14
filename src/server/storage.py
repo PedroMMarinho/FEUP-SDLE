@@ -70,7 +70,7 @@ class ShoppingListStorage:
 
         return sl
 
-    def save_list(self, shop_list, name=None, is_replica=False):
+    def save_list(self, shop_list, name=None, is_replica=False, replica_id=0):
         """
         Removed intended_server_hash, since not present in SQL schema.
         """
@@ -84,8 +84,8 @@ class ShoppingListStorage:
                     list_uuid = shop_list.uuid
 
                     cursor.execute(
-                        "SELECT crdt, name FROM ShoppingList WHERE uuid=%s FOR UPDATE",
-                        (list_uuid,)
+                        "SELECT crdt, name FROM ShoppingList WHERE uuid=%s AND replicaID=%s FOR UPDATE",
+                        (list_uuid, replica_id)
                     )
                     row = cursor.fetchone()
 
@@ -109,9 +109,9 @@ class ShoppingListStorage:
 
                     cursor.execute(
                         """
-                        INSERT INTO ShoppingList (uuid, name, crdt, logical_clock, isReplica)
-                        VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT(uuid) DO UPDATE SET
+                        INSERT INTO ShoppingList (uuid, name, crdt, logical_clock, isReplica, replicaID)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT(uuid, replicaID) DO UPDATE SET
                             crdt = excluded.crdt,
                             name = excluded.name,
                             logical_clock = excluded.logical_clock,
@@ -122,13 +122,17 @@ class ShoppingListStorage:
                             name,
                             crdt_blob,
                             shop_list.clock,
-                            is_replica
+                            is_replica,
+                            replica_id
                         )
                     )
 
                     cursor.execute(
-                        "DELETE FROM ShoppingListItem WHERE shopping_list_uuid=%s",
-                        (list_uuid,)
+                        """
+                        DELETE FROM ShoppingListItem 
+                        WHERE shopping_list_uuid=%s AND shopping_list_replicaID=%s
+                        """,
+                        (list_uuid, replica_id)
                     )
 
                     visible_items = shop_list.get_visible_items()
@@ -137,17 +141,23 @@ class ShoppingListStorage:
                     for item_name, counts in visible_items.items():
                         display_needed = max(0, counts['needed'])
                         display_acquired = max(0, counts['acquired'])
-
+                        
                         items_to_insert.append(
-                            (list_uuid, item_name, display_needed, display_acquired, 0)
+                            (list_uuid, replica_id, item_name, display_needed, display_acquired, 0)
                         )
 
                     if items_to_insert:
                         cursor.executemany(
                             """
-                            INSERT INTO ShoppingListItem (shopping_list_uuid, name,
-                                                          quantityNeeded, quantityAcquired, position)
-                            VALUES (%s, %s, %s, %s, %s)
+                            INSERT INTO ShoppingListItem (
+                                shopping_list_uuid, 
+                                shopping_list_replicaID, 
+                                name, 
+                                quantityNeeded, 
+                                quantityAcquired, 
+                                position
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s)
                             """,
                             items_to_insert
                         )
@@ -158,7 +168,7 @@ class ShoppingListStorage:
 
     def _row_to_shopping_list(self, row):
         """Convert SQL row → ShoppingList object with metadata."""
-        uuid, name, crdt_json, logical_clock, is_replica = row
+        uuid, name, crdt_json, logical_clock, is_replica, replica_id = row
 
         if isinstance(crdt_json, str):
             crdt_json = json.loads(crdt_json)
@@ -170,28 +180,48 @@ class ShoppingListStorage:
         sl.name = name
         sl.clock = logical_clock
         sl.isReplica = is_replica
+        sl.replicaID = replica_id
 
         return sl
 
 
-    def get_list_by_id(self, list_id):
+    def get_list_by_id(self, list_id, replica_id=None):
         self.lock.acquire_read()
         conn = self._get_conn()
 
         try:
             with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT uuid, name, crdt, logical_clock, isReplica
-                    FROM ShoppingList
-                    WHERE uuid=%s
-                """, (list_id,))
-                row = cursor.fetchone()
+                if replica_id is not None:
+                    cursor.execute("""
+                        SELECT uuid, name, crdt, logical_clock, isReplica, replicaID
+                        FROM ShoppingList
+                        WHERE uuid=%s AND replicaID=%s
+                    """, (list_id, replica_id))
+                    
+                    row = cursor.fetchone()
 
-                if not row:
-                    return None
+                    if not row:
+                        return None
 
-                return self._row_to_shopping_list(row)
+                    return self._row_to_shopping_list(row)
+                else:
+                    cursor.execute("""
+                        SELECT uuid, name, crdt, logical_clock, isReplica, replicaID
+                        FROM ShoppingList
+                        WHERE uuid=%s
+                    """, (list_id,))
+                    
+                    rows = cursor.fetchall()
 
+                    if not rows:
+                        return None
+
+                    # Return the first matching list (non-replica preferred)
+                    for row in rows:
+                        sl = self._row_to_shopping_list(row)
+                        if not sl.isReplica:
+                            return sl
+                    return self._row_to_shopping_list(rows[0])
         finally:
             conn.close()
             self.lock.release_read()
@@ -205,7 +235,7 @@ class ShoppingListStorage:
         try:
             with conn.cursor() as cursor:
                 cursor.execute("""
-                    SELECT uuid, name, crdt, logical_clock, isReplica
+                    SELECT uuid, name, crdt, logical_clock, isReplica, replicaID
                     FROM ShoppingList
                     WHERE isReplica=FALSE
                 """)
@@ -229,7 +259,7 @@ class ShoppingListStorage:
         try:
             with conn.cursor() as cursor:
                 cursor.execute("""
-                    SELECT uuid, name, crdt, logical_clock, isReplica
+                    SELECT uuid, name, crdt, logical_clock, isReplica, replicaID
                     FROM ShoppingList
                     WHERE isReplica=TRUE
                 """)
@@ -253,7 +283,7 @@ class ShoppingListStorage:
         try:
             with conn.cursor() as cursor:
                 cursor.execute("""
-                    SELECT uuid, name, crdt, logical_clock, isReplica
+                    SELECT uuid, name, crdt, logical_clock, isReplica, replicaID
                     FROM ShoppingList
                 """)
                 rows = cursor.fetchall()
@@ -270,7 +300,7 @@ class ShoppingListStorage:
             conn.close()
             self.lock.release_read()
 
-    def delete_list(self, list_id):
+    def delete_list(self, list_id, replica_id):
         self.lock.acquire_write()
         conn = self._get_conn()
 
@@ -278,12 +308,16 @@ class ShoppingListStorage:
             with conn:
                 with conn.cursor() as cursor:
                     cursor.execute(
-                        "DELETE FROM ShoppingList WHERE uuid=%s",
-                        (list_id,)
+                        """
+                        DELETE FROM ShoppingListItem 
+                        WHERE shopping_list_uuid=%s AND shopping_list_replicaID=%s
+                        """,
+                        (list_id, replica_id)
                     )
+
                     cursor.execute(
-                        "DELETE FROM ShoppingListItem WHERE shopping_list_uuid=%s",
-                        (list_id,)
+                        "DELETE FROM ShoppingList WHERE uuid=%s AND replicaID=%s",
+                        (list_id, replica_id)
                     )
 
         finally:

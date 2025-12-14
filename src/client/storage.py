@@ -97,7 +97,6 @@ class ShoppingListStorage:
                     if row:
                         db_crdt_json = row[0]
                         existing_name = row[1]
-                    
                         if name is None:
                             name = existing_name
 

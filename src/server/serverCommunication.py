@@ -5,9 +5,10 @@ from src.common.messages.messages import Message, MessageType
 from src.common.threadPool.threadPool import ThreadPool
 import time 
 import random 
+import json
 
 GOSSIP_FANOUT = 2
-REPLICA_COUNT = 3
+REPLICA_COUNT = 2
 GOSSIP_INTERVAL = 0.5
 
 class Server():
@@ -289,13 +290,12 @@ class ServerCommunicator:
             lists_by_server = {}
             port_server_map = {str(s.port): s for s in self.servers}
             for shop_list in all_lists: 
-                intended_servers = self.get_intended_servers(shop_list)
-                for intended_server in intended_servers:
-                    if intended_server.port is not self.port:
-                        if intended_server.port not in lists_by_server:
-                            lists_by_server[intended_server.port] = []
-                        lists_by_server[intended_server.port].append(shop_list)
-                        print(f"[Heartbeat] replica: {shop_list.isReplica} list {shop_list.uuid} intended for server {intended_server.port}")
+                intended_server = self.get_intended_server(shop_list)
+                if intended_server.port != self.port:
+                    if intended_server.port not in lists_by_server:
+                        lists_by_server[intended_server.port] = []
+                    lists_by_server[intended_server.port].append(shop_list)
+                    print(f"[Heartbeat] replica: {shop_list.isReplica} list {shop_list.uuid} intended for server {intended_server.port}")
 
             for server in lists_by_server:
                 if len(lists_by_server[server]) > 0:
@@ -328,8 +328,9 @@ class ServerCommunicator:
         print(f"[Network] Handling REPLICA from {identity}")
 
         replica_item = payload["replica_list"]
-
-        self.storage.save_list(ShoppingList.from_json(replica_item), is_replica=True)
+        replica_id = payload["replicaID"]
+        
+        self.storage.save_list(ShoppingList.from_json(replica_item), is_replica=True, replica_id=replica_id, name=json.loads(replica_item).get('name', None))
 
         ack_message = Message(msg_type=MessageType.REPLICA_ACK, payload={})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
@@ -337,40 +338,27 @@ class ServerCommunicator:
         print(f"[Network] Sent REPLICA_ACK to {identity}")
 
 
-    def get_hashring_neighbors(self):
-        sorted_servers = sorted(self.servers, 
-                                key=lambda s: s.hash)
+#    def get_hashring_neighbors(self):
+#        sorted_servers = sorted(self.servers, 
+#                                key=lambda s: s.hash)
+#
+#        # Only 1 server → no neighbors
+#        if len(sorted_servers) == 1:
+#            return None, None
+#
+#        current_index = next(i for i, s in enumerate(sorted_servers) if s.port == self.port)
+#
+#        left_neighbor  = sorted_servers[current_index - 1]
+#        right_neighbor = sorted_servers[(current_index + 1) % len(sorted_servers)]
+#
+#        return left_neighbor, right_neighbor
 
-        # Only 1 server → no neighbors
-        if len(sorted_servers) == 1:
-            return None, None
 
-        current_index = next(i for i, s in enumerate(sorted_servers) if s.port == self.port)
-
-        left_neighbor  = sorted_servers[current_index - 1]
-        right_neighbor = sorted_servers[(current_index + 1) % len(sorted_servers)]
-
-        return left_neighbor, right_neighbor
-
-
-    def get_next_servers(self, server):
-
-        sorted_servers = sorted(
-            self.servers, key=lambda s: s.hash
-        )
-        current_index = next(i for i, s in enumerate(sorted_servers) if s.port == server.port)
-        next_servers = []
-        for i in range(1, min(REPLICA_COUNT, len(sorted_servers)) + 1):
-            next_server = sorted_servers[(current_index + i) % len(sorted_servers)]
-            next_servers.append(next_server)
-        return next_servers
-
-    def get_intended_servers(self, shop_list):
+    def get_intended_server(self, shop_list):
         sorted_servers = sorted(
             self.servers,
             key=lambda s: s.hash
         )
-
 
         list_hash = hashlib.sha256(shop_list.uuid.encode()).hexdigest()
 
@@ -382,9 +370,10 @@ class ServerCommunicator:
                 break
 
         if shop_list.isReplica:
-            return self.get_next_servers(hash_server)
+            hash_server_index = sorted_servers.index(hash_server)
+            return sorted_servers[(hash_server_index + shop_list.replicaID) % len(sorted_servers)]
         else:
-            return [hash_server] if hash_server else []
+            return hash_server
 
 
     def handle_sent_full_list(self, identity, payload):
@@ -392,8 +381,8 @@ class ServerCommunicator:
         full_list = payload["shopping_list"]
         shopping_list = ShoppingList.from_json(full_list)
 
-        self.storage.save_list(shopping_list, is_replica=False)
-        merged_list = self.storage.get_list_by_id(shopping_list.uuid)
+        self.storage.save_list(shopping_list, is_replica=False, name=shopping_list.name)
+        merged_list = self.storage.get_list_by_id(shopping_list.uuid, 0)
 
         
         self.thread_pool.submit(self.send_replica, merged_list)
@@ -413,8 +402,8 @@ class ServerCommunicator:
 
         primary_index = None
         for i, srv in enumerate(ring):
-            if srv.hash >= list_hash:
-                primary_index = i
+            if list_hash <= srv.hash:
+                primary_index = (i + 1) % ring_len
                 break
         if primary_index is None:
             primary_index = 0  
@@ -427,8 +416,8 @@ class ServerCommunicator:
 
         while successes < REPLICA_COUNT and attempted < ring_len:
             server = ring[index]
-
-            ok = self._try_send_replica_to_server(server, shop_list)
+            replicaID = successes + 1  
+            ok = self._try_send_replica_to_server(server, shop_list, replicaID)
             results.append((server, ok))
 
             if ok:
@@ -437,9 +426,8 @@ class ServerCommunicator:
             attempted += 1
             index = (index + 1) % ring_len
 
-        return results
     
-    def _try_send_replica_to_server(self, server, replica_list):
+    def _try_send_replica_to_server(self, server, replica_list, replicaID):
         print(f"[Network] Attempting to send {len(replica_list.items)} items to server {server.port}")
 
         if hasattr(replica_list, 'isReplica'):
@@ -447,7 +435,7 @@ class ServerCommunicator:
 
         replica_message = Message(
             msg_type=MessageType.REPLICA,
-            payload={"replica_list": replica_list.to_json()}
+            payload={"replica_list": replica_list.to_json(), "replicaID": replicaID}
         )
 
         # Connect or reuse socket
@@ -534,7 +522,7 @@ class ServerCommunicator:
         poller.register(s, zmq.POLLIN)
 
         for attempt in range(1, retries + 1):
-            print(f"[Handoff] Sending SENT_FULL_LIST to {server.port} "
+            print(f"[Handoff] Sending HINTED_HANDOFF to {server.port} "
                 f"(attempt {attempt}/{retries})")
 
             s.send(message.serialize())
@@ -570,10 +558,10 @@ class ServerCommunicator:
         replica_lists = payload["replica_lists"]
 
         for shop_list in main_lists:
-            self.storage.save_list(ShoppingList.from_json(shop_list), is_replica=False)
+            self.storage.save_list(ShoppingList.from_json(shop_list), is_replica=False, name=json.loads(shop_list).get('name', None))
 
         for shop_list in replica_lists:
-            self.storage.save_list(ShoppingList.from_json(shop_list), is_replica=True)
+            self.storage.save_list(ShoppingList.from_json(shop_list), is_replica=True, name=json.loads(shop_list).get('name', None))
 
         ack_message = Message(msg_type=MessageType.HINTED_HANDOFF_ACK, payload={})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
