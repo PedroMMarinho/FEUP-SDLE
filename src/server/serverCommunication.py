@@ -1,5 +1,6 @@
 import hashlib
 import zmq
+from common.crdt.improved import ShoppingList
 from src.common.messages.messages import Message, MessageType
 from src.common.threadPool.threadPool import ThreadPool
 import time 
@@ -287,7 +288,7 @@ class ServerCommunicator:
             all_lists = self.storage.get_all_lists() # TODO could be more optimized 
             lists_by_server = {}
             for shop_list in all_lists: 
-                intended_servers = self.get_intended_servers(shop_list['uuid'])
+                intended_servers = self.get_intended_servers(shop_list)
                 for intended_server in intended_servers:
                     if intended_server.port is not self.port:
                         if intended_server.port not in lists_by_server:
@@ -301,14 +302,16 @@ class ServerCommunicator:
 
     def handle_request_full_list(self, identity, payload): # TODO missing quorum logic
         print(f"[Network] Handling REQUEST_FULL_LIST from {identity}: {payload}")
-        full_list = self.storage.get_list_by_id(payload["uuid"])
+        full_list = self.storage.get_list_by_id(payload["list_id"])
+        shopping_list = full_list.to_json() if full_list else None
+
         message = None
         if full_list is None:
-            print(f"[Network] No list found with ID {payload['uuid']}")
+            print(f"[Network] No list found with ID {payload['list_id']}")
             message = Message(msg_type=MessageType.REQUEST_FULL_LIST_NACK, payload={})
 
         else:
-            message = Message(msg_type=MessageType.REQUEST_FULL_LIST_ACK, payload={"full_list": full_list})
+            message = Message(msg_type=MessageType.REQUEST_FULL_LIST_ACK, payload={"shopping_list": shopping_list})
 
         self.server_interface_socket.send_multipart([identity, message.serialize()])
         print(f"[Network] Sent {message.msg_type} to {identity}")
@@ -318,7 +321,7 @@ class ServerCommunicator:
 
         replica_item = payload["replica_list"]
 
-        self.storage.save_list(replica_item, is_replica=True)
+        self.storage.save_list(ShoppingList.from_json(replica_item), is_replica=True)
 
         ack_message = Message(msg_type=MessageType.REPLICA_ACK, payload={})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
@@ -360,7 +363,7 @@ class ServerCommunicator:
             key=lambda s: s.hash
         )
 
-        list_hash = hashlib.sha256(shop_list['uuid'].encode()).hexdigest()
+        list_hash = hashlib.sha256(shop_list.uuid.encode()).hexdigest()
 
         hash_server = None
 
@@ -369,7 +372,7 @@ class ServerCommunicator:
                 hash_server = server
                 break
 
-        if shop_list['isReplica']:
+        if shop_list.isReplica:
             return self.get_next_servers(hash_server)
         else:
             return [hash_server] if hash_server else []
@@ -377,13 +380,16 @@ class ServerCommunicator:
 
     def handle_sent_full_list(self, identity, payload):
         print(f"[Network] Handling SENT_FULL_LIST from {identity}: {payload}")
-        full_list = payload["full_list"]
+        full_list = payload["shopping_list"]
+        shopping_list = ShoppingList.from_json(full_list)
 
-        self.storage.save_list(full_list, is_replica=False)
+        self.storage.save_list(shopping_list, is_replica=False)
+        merged_list = self.storage.get_list_by_id(shopping_list.uuid)
 
-        self.thread_pool.submit(self.send_replica, full_list)
+        
+        self.thread_pool.submit(self.send_replica, merged_list)
 
-        ack_message = Message(msg_type=MessageType.SENT_FULL_LIST_ACK, payload={})
+        ack_message = Message(msg_type=MessageType.SENT_FULL_LIST_ACK, payload={"shopping_list": merged_list.to_json()})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
         print(f"[Network] Sent SENT_FULL_LIST_ACK to {identity}")
 
@@ -391,7 +397,7 @@ class ServerCommunicator:
         ring = sorted(self.servers, key=lambda s: s.hash)
         ring_len = len(ring)
 
-        list_hash = hashlib.sha256(shop_list['uuid'].encode()).hexdigest()
+        list_hash = hashlib.sha256(shop_list.uuid.encode()).hexdigest()
 
         primary_index = None
         for i, srv in enumerate(ring):
@@ -426,7 +432,7 @@ class ServerCommunicator:
 
         replica_message = Message(
             msg_type=MessageType.REPLICA,
-            payload={"replica_list": replica_list}
+            payload={"replica_list": replica_list.to_json()}
         )
 
         # Connect or reuse socket
@@ -471,16 +477,18 @@ class ServerCommunicator:
 
     def send_hinted_handoff(self, server, shop_lists):
         for shop_list in shop_lists:
-            print(f"[Network] Sending HINTED_HANDOFF to server {server.port} for list {shop_list['uuid']}")
+            print(f"[Network] Sending HINTED_HANDOFF to server {server.port} for list {shop_list.uuid}")
 
         replica_lists = []
         main_lists = []
 
         for shop_list in shop_lists:
-            if not shop_list['isReplica']:
-                main_lists.append(shop_list)
+            if not shop_list.isReplica:
+                main_lists.append(shop_list.to_json())
             else:
-                replica_lists.append(shop_list)
+                replica_lists.append(shop_list.to_json())
+
+        
 
         message = Message(
             msg_type=MessageType.HINTED_HANDOFF,
@@ -520,7 +528,7 @@ class ServerCommunicator:
                     print(f"[Handoff] HINTED_HANDOFF_ACK received from {server.port}")
 
                     for shop_list in shop_lists:
-                        self.storage.delete_list(shop_list['uuid'])
+                        self.storage.delete_list(shop_list.uuid)
                     return True
 
                 print(f"[Handoff] Unexpected reply: {reply.msg_type}")
@@ -541,10 +549,10 @@ class ServerCommunicator:
         replica_lists = payload["replica_lists"]
 
         for shop_list in main_lists:
-            self.storage.save_list(shop_list, is_replica=False)
+            self.storage.save_list(ShoppingList.from_json(shop_list), is_replica=False)
 
         for shop_list in replica_lists:
-            self.storage.save_list(shop_list, is_replica=True)
+            self.storage.save_list(ShoppingList.from_json(shop_list), is_replica=True)
 
         ack_message = Message(msg_type=MessageType.HINTED_HANDOFF_ACK, payload={})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
