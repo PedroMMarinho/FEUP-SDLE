@@ -391,6 +391,7 @@ class ProxyCommunicator:
                         }
                     ).serialize()]
                 )
+                print(f"[Proxy] Sent LIST_UPDATE with UUID {shopping_list_obj.uuid}")
                 return
 
             print(

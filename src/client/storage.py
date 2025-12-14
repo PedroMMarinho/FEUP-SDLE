@@ -48,6 +48,7 @@ class ShoppingListStorage:
     def _reconstruct_crdt(self, data):
         sl = ShoppingList(data['uuid'])
         sl.clock = data['clock']
+        sl.name = data.get('name', None)
         
         if 'uuid' in data:
             sl.uuid = data['uuid']

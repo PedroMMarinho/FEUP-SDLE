@@ -34,7 +34,7 @@ db:
 		-p $(DB_PORT):5432 \
 		-d postgres
 	@echo "Waiting for Postgres to be ready..."
-	@sleep 3
+	@sleep 5
 	@echo "Database is running!"
 
 stop-db:

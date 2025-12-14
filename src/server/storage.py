@@ -44,6 +44,7 @@ class ShoppingListStorage:
         """Mirror of the client's reconstruction logic."""
         sl = ShoppingList(data['uuid'])
         sl.clock = data.get('clock', 0)
+        sl.name = data.get('name', None)
 
         if 'uuid' in data:
             sl.uuid = data['uuid']

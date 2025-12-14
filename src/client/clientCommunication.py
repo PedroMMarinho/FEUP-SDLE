@@ -8,13 +8,10 @@ class Proxy():
     def __init__(self, port):
         self.port = port
         self.requestSocket = None
-        self.subscriberSocket = None
 
     def setRequestSocket(self, socket):
         self.requestSocket = socket
 
-    def setSubscriberSocket(self, socket):  
-        self.subscriberSocket = socket
 
 
 class ClientCommunicator():
@@ -26,8 +23,8 @@ class ClientCommunicator():
         self.running = True
         self.storage = storage
         self.proxies = []
+        self.subscriber = self.context.socket(zmq.SUB)
         self.init_proxies()
-        self.init_subscriber_socket()
 
     def init_proxies(self):
         for port in self.known_proxies:
@@ -41,18 +38,15 @@ class ClientCommunicator():
             subscribe_socket.connect(f"tcp://localhost:{pub_port}")
             self.poller.register(subscribe_socket, zmq.POLLIN)
             print(f"[Network] Subscribed to proxy PUB {pub_port}")
-
-            proxy.setSubscriberSocket(subscribe_socket)
             proxy.setRequestSocket(proxy_socket)
 
-
-    def init_subscriber_socket(self):
-        self.subscriber = self.context.socket(zmq.SUB)
-
-        for proxy in self.proxies:
-            pub_port = proxy.port + 1  # convention: PUB = DEALER + 1
+            pub_port = port + 1  # convention: PUB = DEALER + 1
             self.subscriber.connect(f"tcp://localhost:{pub_port}")
             print(f"[Network] Subscribed to proxy PUB {pub_port}")
+
+
+ 
+            
         
        
 
@@ -74,7 +68,7 @@ class ClientCommunicator():
                 socks = dict(poller.poll(1000))
 
                 if self.subscriber in socks:
-                    raw = self.subscriber.recv()
+                    topic, raw = self.subscriber.recv_multipart()
                     message = Message(json_str=raw)
 
                     if message.msg_type == MessageType.LIST_UPDATE:
@@ -271,13 +265,11 @@ class ClientCommunicator():
         return random.choice(self.proxies)
     
     def subscribe_to_list(self, list_uuid):
-        for proxy in self.proxies:
-            proxy.subscriberSocket.setsockopt_string(zmq.SUBSCRIBE, list_uuid)
+        self.subscriber.setsockopt_string(zmq.SUBSCRIBE, list_uuid)
         print(f"[Network] Subscribed to updates for list {list_uuid}")
     
     def unsubscribe_from_list(self, list_uuid):
-        for proxy in self.proxies:
-            proxy.subscriberSocket.setsockopt_string(zmq.UNSUBSCRIBE, list_uuid)
+        self.subscriber.setsockopt_string(zmq.UNSUBSCRIBE, list_uuid)
         print(f"[Network] Unsubscribed from updates for list {list_uuid}")
 
     def _handle_list_update(self, payload):
