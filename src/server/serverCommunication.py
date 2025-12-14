@@ -83,7 +83,7 @@ class ServerCommunicator:
 
 
     def gossip_loop(self):
-        print("[Gossip] Starting gossip loop...")
+        #print("[Gossip] Starting gossip loop...")
         while self.running:
             try:
                 self.gossip()
@@ -115,7 +115,7 @@ class ServerCommunicator:
         if self.proxies:
             targets.extend(random.sample(self.proxies, min(len(self.proxies), GOSSIP_FANOUT)))
 
-        print(f"[Gossip] Sending GOSSIP to  {[t.port for t in targets]}")
+        #print(f"[Gossip] Sending GOSSIP to  {[t.port for t in targets]}")
         for node in targets:
             try:
                 if node.socket:
@@ -235,17 +235,17 @@ class ServerCommunicator:
 
             for p in incoming_servers:
                 if str(p) not in my_server_ports:
-                    print(f"[Gossip] Discovered new Server: {p}")
+                    #print(f"[Gossip] Discovered new Server: {p}")
                     self.connect_to_server(p)
 
 
             for p in incoming_proxies:
                 if str(p) not in my_proxy_ports:
-                    print(f"[Gossip] Discovered new Proxy: {p}")
+                    #print(f"[Gossip] Discovered new Proxy: {p}")
                     self.connect_to_proxy(p)
             self.hash_ring_version += 1
         elif hash_ring_version > self.hash_ring_version:
-            print(f"[Gossip] Detected newer hash ring version {hash_ring_version}, updating from {self.hash_ring_version}")
+            #print(f"[Gossip] Detected newer hash ring version {hash_ring_version}, updating from {self.hash_ring_version}")
             self.hash_ring_version = hash_ring_version
 
             incoming_servers_set = {str(p) for p in incoming_servers}
@@ -257,7 +257,7 @@ class ServerCommunicator:
                     servers_to_remove.append(s)
 
             for s in servers_to_remove:
-                print(f"[Gossip] Removing stale Server: {s.port}")
+                #print(f"[Gossip] Removing stale Server: {s.port}")
                 self.remove_server(s.port)
 
             proxies_to_remove = []
@@ -266,18 +266,18 @@ class ServerCommunicator:
                     proxies_to_remove.append(p)
 
             for p in proxies_to_remove:
-                print(f"[Gossip] Removing stale Proxy: {p.port}")
+                #print(f"[Gossip] Removing stale Proxy: {p.port}")
                 self.remove_proxy(p.port)
 
 
             for p in incoming_servers:
                 if str(p) not in my_server_ports:
-                    print(f"[Gossip] Discovered new Server: {p}")
+                    #print(f"[Gossip] Discovered new Server: {p}")
                     self.connect_to_server(p)
 
             for p in incoming_proxies:
                 if str(p) not in my_proxy_ports:
-                    print(f"[Gossip] Discovered new Proxy: {p}")
+                    #print(f"[Gossip] Discovered new Proxy: {p}")
                     self.connect_to_proxy(p)
 
 
@@ -295,6 +295,7 @@ class ServerCommunicator:
                         if intended_server.port not in lists_by_server:
                             lists_by_server[intended_server.port] = []
                         lists_by_server[intended_server.port].append(shop_list)
+                        print(f"[Heartbeat] replica: {shop_list.isReplica} list {shop_list.uuid} intended for server {intended_server.port}")
 
             for server in lists_by_server:
                 if len(lists_by_server[server]) > 0:
@@ -337,7 +338,7 @@ class ServerCommunicator:
 
 
     def get_hashring_neighbors(self):
-        sorted_servers = sorted(self.servers + [Server(self.port, self.hash)], 
+        sorted_servers = sorted(self.servers, 
                                 key=lambda s: s.hash)
 
         # Only 1 server → no neighbors
@@ -366,9 +367,10 @@ class ServerCommunicator:
 
     def get_intended_servers(self, shop_list):
         sorted_servers = sorted(
-            self.servers + [Server(self.port, self.hash)],
+            self.servers,
             key=lambda s: s.hash
         )
+
 
         list_hash = hashlib.sha256(shop_list.uuid.encode()).hexdigest()
 
@@ -489,8 +491,10 @@ class ServerCommunicator:
 
 
     def send_hinted_handoff(self, server, shop_lists):
+        
         for shop_list in shop_lists:
             print(f"[Network] Sending HINTED_HANDOFF to server {server.port} for list {shop_list.uuid}")
+            print(f"test: {shop_list.isReplica}")
 
         replica_lists = []
         main_lists = []
@@ -587,16 +591,16 @@ class ServerCommunicator:
         my_proxy_ports.add(str(self.port))
 
         # always merge introductions
-        print(f"[Gossip] Handling gossip introduction from {identity}: servers={incoming_servers},proxies={incoming_proxies}, version={hash_ring_version}")
+        #print(f"[Gossip] Handling gossip introduction from {identity}: servers={incoming_servers},proxies={incoming_proxies}, version={hash_ring_version}")
         changed = False
         for p in incoming_servers:
             if str(p) not in my_server_ports:
-                print(f"[Gossip] Discovered new Server: {p}")
+                #print(f"[Gossip] Discovered new Server: {p}")
                 self.connect_to_server(p)
                 changed = True
         for p in incoming_proxies:
             if str(p) not in my_proxy_ports:
-                print(f"[Gossip] Discovered new Proxy: {p}")
+                #print(f"[Gossip] Discovered new Proxy: {p}")
                 self.connect_to_proxy(p)
                 changed = True
 

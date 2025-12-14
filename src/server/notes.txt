@@ -5,4 +5,7 @@ Server removal
 
 Fixes needed: 
 
-
+threading Fixes
+replica db substitute error, save replicas when fail
+list names
+unecessary hinted handoffs

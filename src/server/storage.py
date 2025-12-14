@@ -261,6 +261,9 @@ class ShoppingListStorage:
                 for row in rows:
                     lists.append(self._row_to_shopping_list(row))
 
+            for lst in lists:
+                print(f"[Storage] Loaded list {lst.uuid} (Replica: {lst.isReplica})")
+
             return lists
 
         finally:
