@@ -7,12 +7,6 @@ import random
 class Proxy():
     def __init__(self, port):
         self.port = port
-        self.requestSocket = None
-
-    def setRequestSocket(self, socket):
-        self.requestSocket = socket
-
-
 
 class ClientCommunicator():
     def __init__(self, db_path, known_proxies, storage):
@@ -30,16 +24,6 @@ class ClientCommunicator():
         for port in self.known_proxies:
             proxy = Proxy(port)
             self.proxies.append(proxy)
-            proxy_socket = self.context.socket(zmq.DEALER)
-            proxy_socket.connect(f"tcp://localhost:{port}")
-
-            subscribe_socket = self.context.socket(zmq.SUB)
-            pub_port = port + 1  # convention: PUB = DEALER + 1
-            subscribe_socket.connect(f"tcp://localhost:{pub_port}")
-            self.poller.register(subscribe_socket, zmq.POLLIN)
-            print(f"[Network] Subscribed to proxy PUB {pub_port}")
-            proxy.setRequestSocket(proxy_socket)
-
             pub_port = port + 1  # convention: PUB = DEALER + 1
             self.subscriber.connect(f"tcp://localhost:{pub_port}")
             print(f"[Network] Subscribed to proxy PUB {pub_port}")
@@ -89,7 +73,8 @@ class ClientCommunicator():
         Attempt to send a full list to a single proxy with retries.
         Returns True on ACK, False otherwise.
         """
-        socket = proxy.requestSocket
+        socket = self.context.socket(zmq.DEALER)
+        socket.connect(f"tcp://localhost:{proxy.port}")
         poller = zmq.Poller()
         poller.register(socket, zmq.POLLIN)
 
@@ -175,7 +160,8 @@ class ClientCommunicator():
         Request a full shopping list from a single proxy with retries.
         Returns the CRDT payload on success, None on failure.
         """
-        socket = proxy.requestSocket
+        socket = self.context.socket(zmq.DEALER)
+        socket.connect(f"tcp://localhost:{proxy.port}")
         poller = zmq.Poller()
         poller.register(socket, zmq.POLLIN)
 

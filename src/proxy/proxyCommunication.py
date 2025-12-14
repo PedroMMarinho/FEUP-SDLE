@@ -15,18 +15,10 @@ class Server():
     def __init__(self, port, hash):
         self.hash = hash
         self.port = port
-        self.socket = None
-
-    def setSocket(self, socket):
-        self.socket = socket
 
 class Proxy():
     def __init__(self, port):
         self.port = port
-        self.socket = None
-
-    def setSocket(self, socket):
-        self.socket = socket
 
 class ProxyCommunicator:
     def __init__(self, port, known_server_ports, known_proxy_ports):
