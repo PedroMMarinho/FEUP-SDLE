@@ -4,7 +4,7 @@ from src.common.messages.messages import Message, MessageType
 import hashlib
 import random
 import time
-import src.common.crdt.improved.ShoppingList as ShoppingList
+from src.common.crdt.improved.ShoppingList import ShoppingList
 
 GOSSIP_FANOUT = 2
 GOSSIP_INTERVAL = 0.5
@@ -158,7 +158,7 @@ class ProxyCommunicator:
         my_proxy_ports = {str(p.port) for p in self.proxies}
         my_proxy_ports.add(str(self.port))
 
-        print(f"[Gossip] Handling gossip from {identity}: servers={incoming_servers}, proxies={incoming_proxies}, version={hash_ring_version}")
+        #print(f"[Gossip] Handling gossip from {identity}: servers={incoming_servers}, proxies={incoming_proxies}, version={hash_ring_version}")
         if hash_ring_version < self.hash_ring_version:
             return # Ignore outdated gossip
         
@@ -168,18 +168,18 @@ class ProxyCommunicator:
             
             for p in incoming_servers:
                 if str(p) not in my_server_ports:
-                    print(f"[Gossip] Discovered new Server: {p}")
+                    #print(f"[Gossip] Discovered new Server: {p}")
                     self.connect_to_server(p)
 
 
             for p in incoming_proxies:
                 if str(p) not in my_proxy_ports:
-                    print(f"[Gossip] Discovered new Proxy: {p}")
+                    #print(f"[Gossip] Discovered new Proxy: {p}")
                     self.connect_to_proxy(p)
 
             self.hash_ring_version += 1
         elif hash_ring_version > self.hash_ring_version:
-            print(f"[Gossip] Detected newer hash ring version {hash_ring_version}, updating from {self.hash_ring_version}")
+            #print(f"[Gossip] Detected newer hash ring version {hash_ring_version}, updating from {self.hash_ring_version}")
             self.hash_ring_version = hash_ring_version
 
             incoming_servers_set = {str(p) for p in incoming_servers}
@@ -191,7 +191,7 @@ class ProxyCommunicator:
                     servers_to_remove.append(s)
 
             for s in servers_to_remove:
-                print(f"[Gossip] Removing stale Server: {s.port}")
+                #print(f"[Gossip] Removing stale Server: {s.port}")
                 self.remove_server(s.port)
 
             proxies_to_remove = []
@@ -200,18 +200,18 @@ class ProxyCommunicator:
                     proxies_to_remove.append(p)
 
             for p in proxies_to_remove:
-                print(f"[Gossip] Removing stale Proxy: {p.port}")
+                #print(f"[Gossip] Removing stale Proxy: {p.port}")
                 self.remove_proxy(p.port)
 
 
             for p in incoming_servers:
                 if str(p) not in my_server_ports:
-                    print(f"[Gossip] Discovered new Server: {p}")
+                    #print(f"[Gossip] Discovered new Server: {p}")
                     self.connect_to_server(p)
 
             for p in incoming_proxies:
                 if str(p) not in my_proxy_ports:
-                    print(f"[Gossip] Discovered new Proxy: {p}")
+                    #print(f"[Gossip] Discovered new Proxy: {p}")
                     self.connect_to_proxy(p)
 
     def remove_server(self, port):
@@ -224,7 +224,7 @@ class ProxyCommunicator:
                     print(f"[Warning] Failed closing server socket {port}: {e}")
 
                 self.servers.remove(s)
-                print(f"[Gossip] Server {port} removed")
+                #print(f"[Gossip] Server {port} removed")
                 return
             
     def remove_proxy(self, port):
@@ -237,7 +237,7 @@ class ProxyCommunicator:
                     print(f"[Warning] Failed closing proxy socket {port}: {e}")
 
                 self.proxies.remove(p)
-                print(f"[Gossip] Proxy {port} removed")
+                #print(f"[Gossip] Proxy {port} removed")
                 return
 
 
@@ -377,7 +377,7 @@ class ProxyCommunicator:
 
                 message = Message(
                     msg_type=MessageType.SENT_FULL_LIST_ACK,
-                    payload={}
+                    payload={"shopping_list": result['shopping_list']}
                 )
                 self.proxy_interface_socket.send_multipart(
                     [identity, message.serialize()]
@@ -519,16 +519,16 @@ class ProxyCommunicator:
         my_proxy_ports.add(str(self.port))
 
         # always merge introductions
-        print(f"[Gossip] Handling gossip introduction from {identity}: servers={incoming_servers},proxies={incoming_proxies}, version={hash_ring_version}")
+        ##print(f"[Gossip] Handling gossip introduction from {identity}: servers={incoming_servers},proxies={incoming_proxies}, version={hash_ring_version}")
         changed = False
         for p in incoming_servers:
             if str(p) not in my_server_ports:
-                print(f"[Gossip] Discovered new Server: {p}")
+               # #print(f"[Gossip] Discovered new Server: {p}")
                 self.connect_to_server(p)
                 changed = True
         for p in incoming_proxies:
             if str(p) not in my_proxy_ports:
-                print(f"[Gossip] Discovered new Proxy: {p}")
+                ##print(f"[Gossip] Discovered new Proxy: {p}")
                 self.connect_to_proxy(p)
                 changed = True
 

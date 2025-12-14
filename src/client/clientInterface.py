@@ -28,12 +28,12 @@ class ClientInterface:
     def create_list(self, name):
         list_uuid = str(uuid.uuid4())
         
-        sl = ShoppingList(list_uuid=list_uuid)
+        sl = ShoppingList(list_uuid)
 
         self.storage.save_list(sl, name)
         print(f"Created list '{name}' with ID: {list_uuid}")
 
-        self.thread_pool.submit(self.communicator.send_full_list, sl.uuid, sl.to_json())
+        self.thread_pool.submit(self.communicator.send_full_list, sl)
         self.communicator.subscribe_to_list(sl.uuid)
 
     def show_lists(self):
@@ -86,7 +86,7 @@ class ClientInterface:
         
         self.storage.save_list(sl)
         print(f"Added '{item_name}' (Need: {qty_needed}) | (Got: {acquired}) to list.")
-        self.thread_pool.submit(self.communicator.send_full_list, list_uuid, sl.to_json())
+        self.thread_pool.submit(self.communicator.send_full_list, sl)
 
     def update_item(self, list_uuid, item_name, needed, acquired=None):
         sl = self.storage.get_list_by_id(list_uuid)
@@ -120,7 +120,7 @@ class ClientInterface:
 
         self.storage.save_list(sl)
         print(f"Updated '{item_name}' -> Need: {target_needed}, Got: {target_acquired}")
-        self.thread_pool.submit(self.communicator.send_full_list, list_uuid, sl.to_json())
+        self.thread_pool.submit(self.communicator.send_full_list, sl)
 
     def delete_item(self, list_uuid, item_name):
         sl = self.storage.get_list_by_id(list_uuid)
@@ -132,7 +132,7 @@ class ClientInterface:
 
         self.storage.save_list(sl)
         print(f"Deleted '{item_name}'.")
-        self.thread_pool.submit(self.communicator.send_full_list, list_uuid, sl.to_json())
+        self.thread_pool.submit(self.communicator.send_full_list, sl)
 
     def delete_list (self, list_uuid):
         self.storage.delete_list(list_uuid)

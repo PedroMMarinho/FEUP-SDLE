@@ -1,6 +1,6 @@
 import hashlib
 import zmq
-from common.crdt.improved import ShoppingList
+from src.common.crdt.improved.ShoppingList import ShoppingList
 from src.common.messages.messages import Message, MessageType
 from src.common.threadPool.threadPool import ThreadPool
 import time 
@@ -287,6 +287,7 @@ class ServerCommunicator:
         while self.running:
             all_lists = self.storage.get_all_lists() # TODO could be more optimized 
             lists_by_server = {}
+            port_server_map = {str(s.port): s for s in self.servers}
             for shop_list in all_lists: 
                 intended_servers = self.get_intended_servers(shop_list)
                 for intended_server in intended_servers:
@@ -296,14 +297,20 @@ class ServerCommunicator:
                         lists_by_server[intended_server.port].append(shop_list)
 
             for server in lists_by_server:
-                self.thread_pool.submit(self.send_hinted_handoff, server, lists_by_server[server])
+                if len(lists_by_server[server]) > 0:
+                    self.thread_pool.submit(self.send_hinted_handoff, port_server_map[server], lists_by_server[server])
             time.sleep(10)
 
 
     def handle_request_full_list(self, identity, payload): # TODO missing quorum logic
         print(f"[Network] Handling REQUEST_FULL_LIST from {identity}: {payload}")
         full_list = self.storage.get_list_by_id(payload["list_id"])
+
+        if full_list and hasattr(full_list, 'isReplica'):
+            delattr(full_list, 'isReplica')
+
         shopping_list = full_list.to_json() if full_list else None
+
 
         message = None
         if full_list is None:
@@ -389,6 +396,9 @@ class ServerCommunicator:
         
         self.thread_pool.submit(self.send_replica, merged_list)
 
+        if hasattr(merged_list, 'isReplica'):
+            delattr(merged_list, 'isReplica')
+
         ack_message = Message(msg_type=MessageType.SENT_FULL_LIST_ACK, payload={"shopping_list": merged_list.to_json()})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
         print(f"[Network] Sent SENT_FULL_LIST_ACK to {identity}")
@@ -428,7 +438,10 @@ class ServerCommunicator:
         return results
     
     def _try_send_replica_to_server(self, server, replica_list):
-        print(f"[Network] Attempting to send {len(replica_list)} items to server {server.port}")
+        print(f"[Network] Attempting to send {len(replica_list.items)} items to server {server.port}")
+
+        if hasattr(replica_list, 'isReplica'):
+            delattr(replica_list, 'isReplica')
 
         replica_message = Message(
             msg_type=MessageType.REPLICA,
@@ -450,7 +463,7 @@ class ServerCommunicator:
         poller.register(server_socket, zmq.POLLIN)
 
         for attempt in range(1, retries + 1):
-            print(f"[Replica] Sending REPLICA x{len(replica_list)} to {server.port} "
+            print(f"[Replica] Sending REPLICA x{len(replica_list.items)} to {server.port} "
                 f"(attempt {attempt}/{retries})")
 
             server_socket.send(replica_message.serialize())
@@ -484,8 +497,12 @@ class ServerCommunicator:
 
         for shop_list in shop_lists:
             if not shop_list.isReplica:
+                if hasattr(shop_list, 'isReplica'):
+                    delattr(shop_list, 'isReplica')
                 main_lists.append(shop_list.to_json())
             else:
+                if hasattr(shop_list, 'isReplica'):
+                    delattr(shop_list, 'isReplica')
                 replica_lists.append(shop_list.to_json())
 
         

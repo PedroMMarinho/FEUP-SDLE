@@ -46,7 +46,7 @@ class ShoppingListStorage:
             return obj
 
     def _reconstruct_crdt(self, data):
-        sl = ShoppingList(list_id=data['id'])
+        sl = ShoppingList(data['uuid'])
         sl.clock = data['clock']
         
         if 'uuid' in data:
@@ -86,7 +86,7 @@ class ShoppingListStorage:
         try:
             with conn:
                 with conn.cursor() as cursor:
-                    list_uuid = getattr(shop_list, 'uuid', shop_list.id)
+                    list_uuid = shop_list.uuid
 
                     cursor.execute(
                         "SELECT crdt, name FROM ShoppingList WHERE uuid=%s FOR UPDATE", 
@@ -240,7 +240,6 @@ class ShoppingListStorage:
                     shopping_list.uuid = uuid
                     shopping_list.name = name
                     shopping_list.clock = logical_clock
-                    shopping_list.notSent = not_sent
 
                     shopping_lists.append(shopping_list)
 
