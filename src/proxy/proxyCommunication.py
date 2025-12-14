@@ -284,12 +284,11 @@ class ProxyCommunicator:
                 print(f"[Network] Unknown message type: {message.msg_type}")
 
 
-    def _try_send_full_list_to_server(self, server, list_id, shopping_list, retries=3, base_timeout=1000):
+    def _try_send_full_list_to_server(self, server, shopping_list_obj, retries=3, base_timeout=1000):
         message = Message(
             msg_type=MessageType.SENT_FULL_LIST,
             payload={
-                "list_id": list_id,
-                "shopping_list": shopping_list
+                "shopping_list": shopping_list_obj.to_json()
             }
         )
 
@@ -309,7 +308,7 @@ class ProxyCommunicator:
 
         for attempt in range(1, retries + 1):
             print(
-                f"[Proxy] Sending FULL_LIST {list_id} → server {server.port} "
+                f"[Proxy] Sending FULL_LIST {shopping_list_obj.uuid} → server {server.port} "
                 f"(attempt {attempt}/{retries})"
             )
 
@@ -335,18 +334,17 @@ class ProxyCommunicator:
 
 
     def handle_sent_full_list(self, identity, payload):
-        list_id = payload.get("list_id")
         shopping_list = payload.get("shopping_list")
-
+        shopping_list_obj = ShoppingList.from_json(shopping_list)
         print(
-            f"[Proxy] Received FULL_LIST {list_id} from client {identity}"
+            f"[Proxy] Received FULL_LIST {shopping_list_obj.uuid} from client {identity}"
         )
 
         if not self.servers:
             print("[Proxy] No servers available")
             return
 
-        key_hash = hashlib.sha256(list_id.encode()).hexdigest()
+        key_hash = hashlib.sha256(shopping_list_obj.uuid.encode()).hexdigest()
 
         # Sort servers by hash ONLY for this request
         servers = sorted(self.servers, key=lambda s: s.hash)
@@ -369,13 +367,12 @@ class ProxyCommunicator:
 
             result = self._try_send_full_list_to_server(
                 server,
-                list_id,
-                shopping_list
+                shopping_list_obj,
             )
 
             if result:
                 print(
-                    f"[Proxy] FULL_LIST {list_id} stored on server {server.port}"
+                    f"[Proxy] FULL_LIST {shopping_list_obj.uuid} stored on server {server.port}"
                 )
 
                 message = Message(
@@ -387,10 +384,9 @@ class ProxyCommunicator:
                 )
 
                 self.proxy_publish_socket.send_multipart(
-                    [list_id.encode('utf-8'), Message(
+                    [shopping_list_obj.uuid.encode('utf-8'), Message(
                         msg_type=MessageType.LIST_UPDATE,
                         payload={
-                            "list_id": result['list_id'],
                             "shopping_list": result['shopping_list']
                         }
                     ).serialize()]
@@ -402,7 +398,7 @@ class ProxyCommunicator:
             )
 
         print(
-            f"[Proxy] FAILED: FULL_LIST {list_id} "
+            f"[Proxy] FAILED: FULL_LIST {shopping_list_obj.uuid} "
             f"after full ring traversal"
         )
         # All servers failed
@@ -456,7 +452,7 @@ class ProxyCommunicator:
 
         if not self.servers:
             print("[Proxy] No servers available")
-            nack = Message(msg_type=MessageType.REQUEST_FULL_LIST_NACK, payload={"list_id": list_id})
+            nack = Message(msg_type=MessageType.REQUEST_FULL_LIST_NACK, payload={})
             self.proxy_interface_socket.send_multipart([identity, nack.serialize()])
             return
 
@@ -481,6 +477,8 @@ class ProxyCommunicator:
             servers_tried += 1
 
             crdt_payload = self._try_request_full_list_from_server(server, list_id)
+
+            crdt_payload = crdt_payload.get("shopping_list") if crdt_payload else None
             if crdt_payload is not None:
                 collected_crdts.append(crdt_payload)
                 successful += 1
@@ -489,23 +487,23 @@ class ProxyCommunicator:
 
         if successful < SUCCESSFUL_READS:
             # All servers failed → send NACK to client
-            nack = Message(msg_type=MessageType.REQUEST_FULL_LIST_NACK, payload={"list_id": list_id})
+            nack = Message(msg_type=MessageType.REQUEST_FULL_LIST_NACK, payload={})
             self.proxy_interface_socket.send_multipart([identity, nack.serialize()])
             print(f"[Proxy] Full list {list_id} not found on any server")
             return
 
         # Merge all CRDTs
-        merged_list = ShoppingList.from_dict(collected_crdts[0])
+        merged_list = ShoppingList.from_json(collected_crdts[0])
         for crdt in collected_crdts[1:]:
             # Assuming ShoppingList.merge_dict exists or implement merge here
-            merged_list = ShoppingList.merge(merged_list, ShoppingList.from_dict(crdt))
+            merged_list = ShoppingList.merge(merged_list, ShoppingList.from_json(crdt))
 
-        merged_list = merged_list.to_dict()
+        merged_list = merged_list.to_json()
 
         # Send ACK with merged list to client
         ack = Message(
             msg_type=MessageType.REQUEST_FULL_LIST_ACK,
-            payload={"list_id": list_id, "shopping_list": merged_list}
+            payload={"shopping_list": merged_list}
         )
         self.proxy_interface_socket.send_multipart([identity, ack.serialize()])
         print(f"[Proxy] Sent merged full list {list_id} to client {identity}")
