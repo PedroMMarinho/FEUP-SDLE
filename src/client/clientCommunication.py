@@ -94,9 +94,11 @@ class ClientCommunicator():
                 reply = Message(json_str=socket.recv())
 
                 if reply.msg_type == MessageType.SENT_FULL_LIST_ACK:
+                    socket.close(linger=0)
                     print(f"[Network] ACK received from proxy {proxy.port}")
                     return reply.payload
                 if reply.msg_type == MessageType.SENT_FULL_LIST_NACK:
+                    socket.close(linger=0)
                     print(f"[Network] NACK received from proxy {proxy.port}")
                     return None
                 else:
@@ -108,7 +110,8 @@ class ClientCommunicator():
                 print(f"[Network] No reply from {proxy.port}, retrying...")
 
             timeout = min(8000, timeout * 2)
-
+            
+        socket.close(linger=0)
         print(f"[Network] Proxy {proxy.port} failed after retries")
         return None
 
@@ -182,10 +185,12 @@ class ClientCommunicator():
                 reply = Message(json_str=socket.recv())
 
                 if reply.msg_type == MessageType.REQUEST_FULL_LIST_ACK:
+                    socket.close(linger=0)
                     print(f"[Network] Full list received from proxy {proxy.port}")
                     return reply.payload    
 
                 if reply.msg_type == MessageType.REQUEST_FULL_LIST_NACK:
+                    socket.close(linger=0)
                     print(f"[Network] Error received from proxy {proxy.port}")
                     return None
 
@@ -195,6 +200,7 @@ class ClientCommunicator():
 
             timeout = min(8000, timeout * 2)
 
+        socket.close(linger=0)
         print(f"[Network] Proxy {proxy.port} failed after retries")
         return None
 

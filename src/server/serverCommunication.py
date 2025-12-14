@@ -15,18 +15,12 @@ class Server():
     def __init__(self, port, hash):
         self.hash = hash
         self.port = port
-        self.socket = None
 
-    def setSocket(self, socket):
-        self.socket = socket
 
 class Proxy():
     def __init__(self, port):
         self.port = port
-        self.socket = None
 
-    def setSocket(self, socket):
-        self.socket = socket
 
 
 class ServerCommunicator:
@@ -68,9 +62,6 @@ class ServerCommunicator:
         for port, _ in self.known_proxies:
             proxy = Proxy(port)
             self.proxies.append(proxy)
-            socket = self.context.socket(zmq.DEALER)
-            socket.connect(f"tcp://localhost:{port}")
-            proxy.setSocket(socket)
 
 
     def setup_servers(self):
@@ -78,9 +69,6 @@ class ServerCommunicator:
         for port, hash in self.known_servers:
             server = Server(port, hash)
             self.servers.append(server)
-            socket = self.context.socket(zmq.DEALER)
-            socket.connect(f"tcp://localhost:{port}")
-            server.setSocket(socket)
 
 
     def gossip_loop(self):
@@ -119,8 +107,11 @@ class ServerCommunicator:
         #print(f"[Gossip] Sending GOSSIP to  {[t.port for t in targets]}")
         for node in targets:
             try:
-                if node.socket:
-                    node.socket.send(serialized_msg)
+                sock = self.context.socket(zmq.DEALER)
+                sock.connect(f"tcp://localhost:{node.port}")
+                if sock:
+                    sock.send(serialized_msg)
+                    sock.close(linger=0)
             except Exception as e:
                 print(f"[Gossip] Failed to send to {node.port}: {e}")
 
@@ -168,36 +159,18 @@ class ServerCommunicator:
             hash_val = hashlib.sha256(f"server_{port}".encode()).hexdigest()
 
         server = Server(port, hash_val)
-        try:
-            sock = self.context.socket(zmq.DEALER)
-            sock.connect(f"tcp://localhost:{port}")
-            server.setSocket(sock)
-            self.servers.append(server)
-        except Exception as e:
-            print(f"[Error] Failed to connect to server {port}: {e}")
-
+        self.servers.append(server)
+        
     def connect_to_proxy(self, port):
         if any(str(p.port) == str(port) for p in self.proxies):
             return
 
         proxy = Proxy(port)
-        try:
-            sock = self.context.socket(zmq.DEALER)
-            sock.connect(f"tcp://localhost:{port}")
-            proxy.setSocket(sock)
-            self.proxies.append(proxy)
-        except Exception as e:
-            print(f"[Error] Failed to connect to proxy {port}: {e}")
+        self.proxies.append(proxy)
 
     def remove_server(self, port):
         for s in list(self.servers):  # copy to avoid mutation issues
             if str(s.port) == str(port):
-                try:
-                    if hasattr(s, "socket") and s.socket is not None:
-                        s.socket.close(linger=0)
-                except Exception as e:
-                    print(f"[Warning] Failed closing server socket {port}: {e}")
-
                 self.servers.remove(s)
                 print(f"[Gossip] Server {port} removed")
                 return
@@ -205,12 +178,6 @@ class ServerCommunicator:
     def remove_proxy(self, port):
         for p in list(self.proxies):
             if str(p.port) == str(port):
-                try:
-                    if hasattr(p, "socket") and p.socket is not None:
-                        p.socket.close(linger=0)
-                except Exception as e:
-                    print(f"[Warning] Failed closing proxy socket {port}: {e}")
-
                 self.proxies.remove(p)
                 print(f"[Gossip] Proxy {port} removed")
                 return
@@ -439,12 +406,9 @@ class ServerCommunicator:
         )
 
         # Connect or reuse socket
-        if server.socket is None:
-            server_socket = self.context.socket(zmq.DEALER)
-            server_socket.connect(f"tcp://localhost:{server.port}")
-            server.setSocket(server_socket)
-        else:
-            server_socket = server.socket
+        server_socket = self.context.socket(zmq.DEALER)
+        server_socket.connect(f"tcp://localhost:{server.port}")
+
 
         retries = 3
         timeout = 1000  # ms
@@ -464,6 +428,7 @@ class ServerCommunicator:
 
                 if reply.msg_type == MessageType.REPLICA_ACK:
                     print(f"[Replica] ACK received from {server.port}")
+                    server_socket.close(linger=0)
                     return True
 
                 print(f"[Replica] Unexpected reply {reply.msg_type}")
@@ -474,6 +439,7 @@ class ServerCommunicator:
             timeout = min(8000, timeout * 2)
 
         print(f"[Replica] FAILED after retries → {server.port}")
+        server_socket.close(linger=0)
         return False
 
 
@@ -508,12 +474,9 @@ class ServerCommunicator:
         )
 
         # Create / reuse socket
-        if server.socket is None:
-            s = self.context.socket(zmq.DEALER)
-            s.connect(f"tcp://localhost:{server.port}")
-            server.setSocket(s)
-        else:
-            s = server.socket
+        s = self.context.socket(zmq.DEALER)
+        s.connect(f"tcp://localhost:{server.port}")
+
 
         retries = 3
         timeout = 1000  # ms
@@ -538,6 +501,7 @@ class ServerCommunicator:
 
                     for shop_list in shop_lists:
                         self.storage.delete_list(shop_list.uuid)
+                    s.close(linger=0)
                     return True
 
                 print(f"[Handoff] Unexpected reply: {reply.msg_type}")
@@ -549,6 +513,7 @@ class ServerCommunicator:
 
         # FAILED → queue it
         print(f"[Handoff] FAILED to send hinted handoff to {server.port}, queueing action")
+        s.close(linger=0)
         return False
 
     def handle_hinted_handoff(self, identity, payload):

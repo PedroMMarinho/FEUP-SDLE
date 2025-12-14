@@ -105,8 +105,11 @@ class ProxyCommunicator:
 
         for node in targets:
             try:
-                if node.socket:
-                    node.socket.send(serialized_msg)
+                socket = self.context.socket(zmq.DEALER)
+                socket.connect(f"tcp://localhost:{node.port}")
+                if socket:
+                    socket.send(serialized_msg)
+                    socket.close(linger=0)
             except Exception as e:
                 print(f"[Gossip] Failed to send to {node.port}: {e}")
 
@@ -118,26 +121,15 @@ class ProxyCommunicator:
             hash_val = hashlib.sha256(f"server_{port}".encode()).hexdigest()
 
         server = Server(port, hash_val)
-        try:
-            sock = self.context.socket(zmq.DEALER)
-            sock.connect(f"tcp://localhost:{port}")
-            server.setSocket(sock)
-            self.servers.append(server)
-        except Exception as e:
-            print(f"[Error] Failed to connect to server {port}: {e}")
+        self.servers.append(server)
+
 
     def connect_to_proxy(self, port):
         if any(str(p.port) == str(port) for p in self.proxies):
             return
-
         proxy = Proxy(port)
-        try:
-            sock = self.context.socket(zmq.DEALER)
-            sock.connect(f"tcp://localhost:{port}")
-            proxy.setSocket(sock)
-            self.proxies.append(proxy)
-        except Exception as e:
-            print(f"[Error] Failed to connect to proxy {port}: {e}")
+        self.proxies.append(proxy)
+
 
 
     def handle_gossip(self, identity, payload):
@@ -209,12 +201,6 @@ class ProxyCommunicator:
     def remove_server(self, port):
         for s in list(self.servers):  # copy to avoid mutation issues
             if str(s.port) == str(port):
-                try:
-                    if hasattr(s, "socket") and s.socket is not None:
-                        s.socket.close(linger=0)
-                except Exception as e:
-                    print(f"[Warning] Failed closing server socket {port}: {e}")
-
                 self.servers.remove(s)
                 #print(f"[Gossip] Server {port} removed")
                 return
@@ -222,12 +208,6 @@ class ProxyCommunicator:
     def remove_proxy(self, port):
         for p in list(self.proxies):
             if str(p.port) == str(port):
-                try:
-                    if hasattr(p, "socket") and p.socket is not None:
-                        p.socket.close(linger=0)
-                except Exception as e:
-                    print(f"[Warning] Failed closing proxy socket {port}: {e}")
-
                 self.proxies.remove(p)
                 #print(f"[Gossip] Proxy {port} removed")
                 return
@@ -286,12 +266,8 @@ class ProxyCommunicator:
 
 
         # Connect or reuse socket
-        if server.socket is None:
-            sock = self.context.socket(zmq.DEALER)
-            sock.connect(f"tcp://localhost:{server.port}")
-            server.setSocket(sock)
-        else:
-            sock = server.socket
+        sock = self.context.socket(zmq.DEALER)
+        sock.connect(f"tcp://localhost:{server.port}")
 
         poller = zmq.Poller()
         poller.register(sock, zmq.POLLIN)
@@ -312,6 +288,7 @@ class ProxyCommunicator:
                 reply = Message(json_str=sock.recv())
 
                 if reply.msg_type == MessageType.SENT_FULL_LIST_ACK:
+                    sock.close(linger=0)
                     print(f"[Proxy] ACK from server {server.port}")
                     return reply.payload
 
@@ -322,6 +299,7 @@ class ProxyCommunicator:
 
             timeout = min(8000, timeout * 2)
 
+        sock.close(linger=0)
         return None
 
 
@@ -409,12 +387,9 @@ class ProxyCommunicator:
             payload={"list_id": list_id}
         )
 
-        if server.socket is None:
-            sock = self.context.socket(zmq.DEALER)
-            sock.connect(f"tcp://localhost:{server.port}")
-            server.setSocket(sock)
-        else:
-            sock = server.socket
+        sock = self.context.socket(zmq.DEALER)
+        sock.connect(f"tcp://localhost:{server.port}")
+
 
         poller = zmq.Poller()
         poller.register(sock, zmq.POLLIN)
@@ -426,12 +401,14 @@ class ProxyCommunicator:
             if sock in socks:
                 reply = Message(json_str=sock.recv())
                 if reply.msg_type == MessageType.REQUEST_FULL_LIST_ACK:
+                    sock.close(linger=0)
                     return reply.payload  # CRDT dict
                 elif reply.msg_type == MessageType.REQUEST_FULL_LIST_NACK:
+                    sock.close(linger=0)
                     return None
 
             timeout = min(8000, timeout * 2)
-
+        sock.close(linger=0)
         return None
 
 
