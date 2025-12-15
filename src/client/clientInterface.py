@@ -82,7 +82,7 @@ class ClientInterface:
         except ValueError:
             acquired = 0
 
-        sl.add_item(name=item_name, needed_amount=qty_needed, acquired_amount=acquired)
+        sl.add_item(name=item_name, client_id=self.client_id, needed_amount=qty_needed, acquired_amount=acquired)
         
         self.storage.save_list(sl,sl.name)
         print(f"Added '{item_name}' (Need: {qty_needed}) | (Got: {acquired}) to list.")
@@ -113,10 +113,10 @@ class ClientInterface:
         diff_acquired = target_acquired - current_acquired
 
         if diff_needed != 0:
-            sl.update_needed(item_name, diff_needed)
+            sl.update_needed(item_name, diff_needed, self.client_id)
         
         if diff_acquired != 0:
-            sl.update_acquired(item_name, diff_acquired)
+            sl.update_acquired(item_name, diff_acquired, self.client_id)
 
         self.storage.save_list(sl, sl.name)
         print(f"Updated '{item_name}' -> Need: {target_needed}, Got: {target_acquired}")

@@ -13,12 +13,10 @@ class ShoppingList:
         self.clock += 1
         return self.clock
 
-    def _get_tag(self):
-        return f"{self.uuid}:{self.clock}"
 
-    def add_item(self, name, needed_amount=1, acquired_amount=0):
+    def add_item(self, name,client_id ,needed_amount=1, acquired_amount=0 ):
         self._tick()
-        tag = self._get_tag()
+        tag = f"{client_id}:{self.clock}"
 
         if name not in self.items:
             self.items[name] = {
@@ -26,8 +24,8 @@ class ShoppingList:
                 "acquired": PNCounter(),
                 "existence": ORSet() 
             }
-            self.items[name]["needed"].change(self.uuid, needed_amount)
-            self.items[name]["acquired"].change(self.uuid, acquired_amount)
+            self.items[name]["needed"].change(client_id, needed_amount)
+            self.items[name]["acquired"].change(client_id, acquired_amount)
 
         self.items[name]["existence"].add(name, tag)
 
@@ -36,15 +34,15 @@ class ShoppingList:
         if name in self.items:
             self.items[name]["existence"].remove(name)
 
-    def update_needed(self, name, amount):
+    def update_needed(self, name, amount, client_id):
         self._tick()
         if name in self.items:
-            self.items[name]["needed"].change(self.uuid, amount)
+            self.items[name]["needed"].change(client_id, amount)
 
-    def update_acquired(self, name, amount):
+    def update_acquired(self, name, amount, client_id):
         self._tick()
         if name in self.items:
-            self.items[name]["acquired"].change(self.uuid, amount)
+            self.items[name]["acquired"].change(client_id, amount)
 
     def get_visible_items(self):
         visible_list = {}
@@ -59,8 +57,11 @@ class ShoppingList:
     def merge(self, other):
         self.clock = max(self.clock, other.clock)
         all_keys = set(self.items.keys()) | set(other.items.keys())
-        
+        print(f"[ShoppingList] Merging shoppiing lists. all_keys: {all_keys}")
+        print(f"[ShoppingList] Self items before merge: {self.items.keys()}")
+        print(f"[ShoppingList] Other items to merge: {other.items.keys()}")
         for name in all_keys:
+    
             if name not in self.items:
                 self.items[name] = {
                     "needed": PNCounter(),
@@ -68,7 +69,10 @@ class ShoppingList:
                     "existence": ORSet()
                 }
             if name in other.items:
+                print(f"[ShoppingList] Merging item '{name}'")
                 other_data = other.items[name]
+                print(f"[ShoppingList] Self data: {self.items[name]}")
+                print(f"[ShoppingList] Other data: {other_data}")
                 self.items[name]["needed"].merge(other_data["needed"])
                 self.items[name]["acquired"].merge(other_data["acquired"])
                 self.items[name]["existence"].merge(other_data["existence"])
