@@ -109,6 +109,7 @@ class ProxyCommunicator:
                 socket.connect(f"tcp://localhost:{node.port}")
                 if socket:
                     socket.send(serialized_msg)
+                    time.sleep(0.1)  # Good code :D
                     socket.close(linger=0)
             except Exception as e:
                 print(f"[Gossip] Failed to send to {node.port}: {e}")

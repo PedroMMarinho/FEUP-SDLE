@@ -15,6 +15,7 @@ class Server():
     def __init__(self, port, hash):
         self.hash = hash
         self.port = port
+        self.stage_for_removal = False
 
 
 class Proxy():
@@ -72,7 +73,7 @@ class ServerCommunicator:
 
 
     def gossip_loop(self):
-        #print("[Gossip] Starting gossip loop...")
+        print("[Gossip] Starting gossip loop...")
         while self.running:
             try:
                 self.gossip()
@@ -80,7 +81,12 @@ class ServerCommunicator:
             except Exception as e:
                 print(f"[Gossip] Error in loop: {e}")
 
-    def gossip(self):   
+    def gossip(self):
+        for server in list(self.servers):
+            if server.stage_for_removal:
+                self.servers.remove(server)
+                print(f"[Gossip] Server {server.port} removed from gossip list")
+           
         server_ports = [str(s.port) for s in self.servers]
         server_ports.append(str(self.port))
         
@@ -96,6 +102,7 @@ class ServerCommunicator:
             self.message = Message(MessageType.GOSSIP_INTRODUCTION, payload)
         else:
             self.message = Message(MessageType.GOSSIP, payload)
+
         serialized_msg = self.message.serialize()
 
         targets = []
@@ -104,13 +111,14 @@ class ServerCommunicator:
         if self.proxies:
             targets.extend(random.sample(self.proxies, min(len(self.proxies), GOSSIP_FANOUT)))
 
-        #print(f"[Gossip] Sending GOSSIP to  {[t.port for t in targets]}")
+        print(f"[Gossip] Sending GOSSIP to  {[t.port for t in targets]}")
         for node in targets:
             try:
                 sock = self.context.socket(zmq.DEALER)
                 sock.connect(f"tcp://localhost:{node.port}")
                 if sock:
                     sock.send(serialized_msg)
+                    time.sleep(0.1) # Good code :D
                     sock.close(linger=0)
             except Exception as e:
                 print(f"[Gossip] Failed to send to {node.port}: {e}")
@@ -121,8 +129,8 @@ class ServerCommunicator:
         while self.running:
             socks = dict(self.poller.poll(1000))
             for sock in socks:
-                if socks[sock] == zmq.POLLIN: # idk
-                    if sock == self.server_interface_socket: # idk
+                if socks[sock] == zmq.POLLIN: 
+                    if sock == self.server_interface_socket: 
                         self.handle_server_interface_socket()
 
         self.context.destroy()
@@ -147,9 +155,124 @@ class ServerCommunicator:
                 self.thread_pool.submit(self.handle_sent_full_list, identity, message.payload)
             case MessageType.HINTED_HANDOFF:
                 self.thread_pool.submit(self.handle_hinted_handoff, identity, message.payload)
+            case MessageType.REMOVE_SERVER:
+                self.thread_pool.submit(self.shutdown, identity, message.payload)
+            case MessageType.GOSSIP_SERVER_REMOVAL:
+                self.thread_pool.submit(self.handle_gossip_server_removal, identity, message.payload)
             case _:
                 print(f"[Network] Unknown message type: {message.msg_type}")
 
+
+    def handle_gossip_server_removal(self, identity, payload):
+        print(f"[Network] Handling GOSSIP_SERVER_REMOVAL from {identity}: {payload}")
+
+        all_lists = payload["all_lists"]
+        port = payload["port"]
+
+        for shop_list in all_lists:
+            obj = ShoppingList.from_json(shop_list)
+            shop_list_replica_id = json.loads(shop_list).get('replicaID', 0)
+            self.storage.save_list(obj,name=obj.name, replica_id=shop_list_replica_id)
+
+        for s in list(self.servers):  # copy to avoid mutation issues
+            if str(s.port) == str(port):
+                s.stage_for_removal = True
+                self.hash_ring_version += 1
+                print(f"[Gossip] Server {port} removed due to GOSSIP_SERVER_REMOVAL")
+                break
+
+
+        ack_message = Message(msg_type=MessageType.GOSSIP_SERVER_REMOVAL_ACK, payload={})
+        self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
+
+        print(f"[Network] Sent GOSSIP_SERVER_REMOVAL_ACK to {identity}")
+
+    def shutdown(self, identity, payload):
+        print("[System] Initiating graceful shutdown...")
+
+        shoppingLists = self.storage.get_all_lists()
+
+        message = Message(
+            msg_type=MessageType.GOSSIP_SERVER_REMOVAL,
+            payload={
+                "all_lists": [shop_list.to_json() for shop_list in shoppingLists],
+                "port": self.port
+            }
+        )
+        serialized_msg = message.serialize()
+
+        if not self.servers:
+            print("[System] No peers available to offload data.")
+            return False
+
+        # 2. Configuration for the Handoff Loop
+        needed_acks = min(len(self.servers), 2)  
+        successful_recipients = set()            
+        
+        max_total_attempts = 3                  
+        attempt_count = 0
+
+        # 3. Dynamic Retry Loop
+        while len(successful_recipients) < needed_acks and attempt_count < max_total_attempts:
+            attempt_count += 1
+
+            candidates = [s for s in self.servers if s.port not in successful_recipients and s.port != self.port]
+            
+            if not candidates:
+                print("[Handoff] No more unique candidates available.")
+                break
+
+            target_server = random.choice(candidates)
+            
+            print(f"[Handoff] Attempt {attempt_count}/{max_total_attempts}: "
+                  f"Trying to offload to {target_server.port}...")
+
+            s = self.context.socket(zmq.DEALER)
+            try:
+                s.connect(f"tcp://localhost:{target_server.port}")
+                s.send(serialized_msg)
+                
+                print(f"[Handoff] Sent GOSSIP_SERVER_REMOVAL to {target_server.port}, awaiting ACK...")
+
+                poller = zmq.Poller()
+                poller.register(s, zmq.POLLIN)
+                socks = dict(poller.poll(1500))
+
+                if s in socks and socks[s] == zmq.POLLIN:
+                    reply_bytes = s.recv()
+                    reply = Message(json_str=reply_bytes)
+
+                    if reply.msg_type == MessageType.GOSSIP_SERVER_REMOVAL_ACK:
+                        print(f"[Handoff] SUCCESS: Data offloaded to {target_server.port}")
+                        successful_recipients.add(target_server.port)
+                    else:
+                        print(f"[Handoff] Unexpected reply from {target_server.port}: {reply.msg_type}")
+                else:
+                    print(f"[Handoff] TIMEOUT: No reply from {target_server.port}. Switching target...")
+
+            except Exception as e:
+                print(f"[Handoff] Socket error with {target_server.port}: {e}")
+            finally:
+                s.close()
+
+        if len(successful_recipients) > 0:
+            print(f"[Handoff] Handoff complete. Data stored on: {list(successful_recipients)}")
+            print("[Handoff] Clearing local storage...")
+
+            ack_message = Message(msg_type=MessageType.REMOVE_SERVER_ACK, payload={})
+            self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
+
+
+            for shop_list in shoppingLists:
+                self.storage.delete_list(shop_list.uuid, shop_list.replicaID)
+
+            print("[System] Shutdown complete.")
+            self.running = False
+
+            return True
+        else:
+            print("[Handoff] CRITICAL: Failed to offload data to any server after max attempts.")
+            return False
 
     def connect_to_server(self, port, hash_val=None):
         if any(str(s.port) == str(port) for s in self.servers):
@@ -171,8 +294,8 @@ class ServerCommunicator:
     def remove_server(self, port):
         for s in list(self.servers):  # copy to avoid mutation issues
             if str(s.port) == str(port):
-                self.servers.remove(s)
-                print(f"[Gossip] Server {port} removed")
+                s.stage_for_removal = True
+                print(f"[Gossip] Server {port} staged for removal")
                 return
             
     def remove_proxy(self, port):
@@ -348,7 +471,7 @@ class ServerCommunicator:
         full_list = payload["shopping_list"]
         shopping_list = ShoppingList.from_json(full_list)
 
-        self.storage.save_list(shopping_list, is_replica=False, name=shopping_list.name)
+        self.storage.save_list(shopping_list, is_replica=False, name=shopping_list.name, replica_id=0)
         merged_list = self.storage.get_list_by_id(shopping_list.uuid, 0)
 
         
@@ -500,7 +623,7 @@ class ServerCommunicator:
                     print(f"[Handoff] HINTED_HANDOFF_ACK received from {server.port}")
 
                     for shop_list in shop_lists:
-                        self.storage.delete_list(shop_list.uuid)
+                        self.storage.delete_list(shop_list.uuid, shop_list.replicaID)
                     s.close(linger=0)
                     return True
 
@@ -523,11 +646,15 @@ class ServerCommunicator:
         replica_lists = payload["replica_lists"]
 
         for shop_list in main_lists:
-            self.storage.save_list(ShoppingList.from_json(shop_list), is_replica=False, name=json.loads(shop_list).get('name', None))
+            obj = ShoppingList.from_json(shop_list)
+            replica_id = json.loads(shop_list).get('replicaID', 0)
+            self.storage.save_list(obj, is_replica=False, name=obj.name, replica_id=replica_id)
 
         for shop_list in replica_lists:
-            self.storage.save_list(ShoppingList.from_json(shop_list), is_replica=True, name=json.loads(shop_list).get('name', None))
-
+            obj = ShoppingList.from_json(shop_list)
+            replica_id = json.loads(shop_list).get('replicaID', 0)
+            self.storage.save_list(obj, is_replica=True, name=obj.name, replica_id=replica_id)
+            
         ack_message = Message(msg_type=MessageType.HINTED_HANDOFF_ACK, payload={})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
 

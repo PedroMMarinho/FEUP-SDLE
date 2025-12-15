@@ -301,7 +301,7 @@ class ShoppingListStorage:
             conn.close()
             self.lock.release_read()
 
-    def delete_list(self, list_id, replica_id):
+    def delete_list(self, list_id, replica_id=0):
         self.lock.acquire_write()
         conn = self._get_conn()
 

@@ -68,7 +68,7 @@ remove-server:
 		echo "ERROR: Please provide SERVER_NAME, e.g. make remove_server SERVER_NAME=Server_3"; \
 		exit 1; \
 	fi
-	PYTHONPATH=$(PWD) $(PYTHON) src.admin.main --action remove_server --server_name $(SERVER_NAME)
+	PYTHONPATH=$(PWD) $(PYTHON) -m src.admin.main --action remove_server --server_name $(SERVER_NAME)
 
 # --- CLEANUP ---
 clean-logs: 
@@ -102,11 +102,12 @@ help:
 	@echo "  make install           - Install python dependencies"
 	@echo "  make db                - Start PostgreSQL in Docker"
 	@echo "  make stop-db           - Stop PostgreSQL"
-	@echo "  make client1           - Run Client A"
-	@echo "  make client2           - Run Client B"
+	@echo "  make clean-db          - Remove PostgreSQL container"
+	@echo "  make init              - Initialize the system (db, servers, proxies)"
+	@echo "  make client ID=<User_X>  - Run a client with identifier User_X"
 	@echo "  make servers           - Run initial setup via admin tool"
-	@echo "  make add_server        - Add a new server via admin tool"
-	@echo "  make remove_server     - Remove a server via admin tool (use SERVER_NAME)"
+	@echo "  make add-server        - Add a new server via admin tool"
+	@echo "  make remove-server     - Remove a server via admin tool (use SERVER_NAME)"
 	@echo "  make clean-logs        - Remove server log files"
 	@echo "  make stop-servers      - Stop all running servers"
-	@echo "  make clean             - Remove Python cache"
+	@echo "  make clean             - Full cleanup (logs, servers, db)"

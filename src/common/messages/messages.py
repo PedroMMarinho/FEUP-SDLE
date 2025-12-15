@@ -22,6 +22,7 @@ class MessageType(Enum):
     GOSSIP = 18
     LIST_UPDATE = 19
     GOSSIP_INTRODUCTION = 20
+    GOSSIP_SERVER_REMOVAL_ACK = 21
 
 class Message:
     def __init__(self, msg_type=None, payload=None, json_str=None):
