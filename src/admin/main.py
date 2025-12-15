@@ -3,62 +3,90 @@ import subprocess
 import os
 import zmq
 import json
+import sys
 from src.common.messages.messages import MessageType, Message
 
 
 SERVER_BASE_PORT = 5555
 PROXY_BASE_PORT = 6000
+PROXY_INCREMENT = 2
 SERVER_LOG_DIR = "src/server/server_logs"
 PROXY_LOG_DIR = "src/proxy/proxy_logs"
+
+# New PID file constants
+SERVER_PIDS_FILE = os.path.join(SERVER_LOG_DIR, "server_pids.txt")
+PROXY_PIDS_FILE = os.path.join(PROXY_LOG_DIR, "proxy_pids.txt")
 
 def initial_setup():
     """
     Matches: make servers
-    Starts: Server_1, Server_2, Server_3, Server_4, Server_5 + Proxy_1, Proxy_2
+    Starts: Server_1..5 and Proxy_1..2
+    Stores PIDs in text files for clean shutdown.
     """
     os.makedirs(SERVER_LOG_DIR, exist_ok=True)
     os.makedirs(PROXY_LOG_DIR, exist_ok=True)
 
-    if os.path.exists(f"{SERVER_LOG_DIR}/known_servers.txt"):
-        os.remove(f"{SERVER_LOG_DIR}/known_servers.txt")
-    if os.path.exists(f"{PROXY_LOG_DIR}/known_proxies.txt"):
-        os.remove(f"{PROXY_LOG_DIR}/known_proxies.txt")
+    # Clean old lists and PID files
+    for fpath in [
+        f"{SERVER_LOG_DIR}/known_servers.txt",
+        f"{PROXY_LOG_DIR}/known_proxies.txt",
+        SERVER_PIDS_FILE,
+        PROXY_PIDS_FILE
+    ]:
+        if os.path.exists(fpath):
+            os.remove(fpath)
 
-     # Start 5 servers
-
+    # --- 1. GENERATE CONFIGURATION FILES FIRST ---
+    print("Generating network topology...")
+    
     with open(f"{SERVER_LOG_DIR}/known_servers.txt", "w") as f:
         for i in range(1, 6):
-            f.write(f"Server_{i}:{SERVER_BASE_PORT + i - 1}\n")
-            subprocess.Popen([
-                "python3", "-m", "src.server.main",
-                "--id", f"Server_{i}",
-                "--port", str(SERVER_BASE_PORT + i - 1),
+            port = SERVER_BASE_PORT + i - 1
+            f.write(f"Server_{i}:{port}\n")
+
+    with open(f"{PROXY_LOG_DIR}/known_proxies.txt", "w") as f:
+        for i in range(1, 3):
+            port = PROXY_BASE_PORT + PROXY_INCREMENT*i - 1
+            f.write(f"Proxy_{i}:{port}\n")
+
+    # --- 2. START SERVERS AND TRACK PIDS ---
+    print("Starting Servers...")
+    with open(SERVER_PIDS_FILE, "w") as pid_f:
+        for i in range(1, 6):
+            port = SERVER_BASE_PORT + i - 1
+            proc = subprocess.Popen([
+                sys.executable, "-u", "-m", "src.server.main", 
+                "--port", str(port),
                 "--db", f"server_{i}",
                 "--servers", f"{SERVER_LOG_DIR}/known_servers.txt"
             ], stdout=open(f"{SERVER_LOG_DIR}/server{i}.log", "w"), stderr=subprocess.STDOUT)
             
+            # Write PID to file
+            pid_f.write(f"{proc.pid}\n")
+            
+    print(f"Initial 5 servers started (PIDs saved to {SERVER_PIDS_FILE}).")
 
-    print("Initial 5 servers started (matching `make servers`).")
-
-    with open(f"{PROXY_LOG_DIR}/known_proxies.txt", "w") as f:
+    # --- 3. START PROXIES AND TRACK PIDS ---
+    print("Starting Proxies...")
+    with open(PROXY_PIDS_FILE, "w") as pid_w:
         for i in range(1, 3):
-            f.write(f"Proxy_{i}:{PROXY_BASE_PORT + i - 1}\n")
-            subprocess.Popen([
-                "python3", "-m", "src.proxy.main",
-                "--id", f"Proxy_{i}",
-                "--port", str(PROXY_BASE_PORT + i - 1),
-                "--db", f"proxy_{i}",
-                "--proxies", f"{PROXY_LOG_DIR}/known_proxies.txt"
+            port = PROXY_BASE_PORT + PROXY_INCREMENT*i - 1
+            proc = subprocess.Popen([
+                sys.executable, "-u", "-m", "src.proxy.main",   
+                "--port", str(port),
+                "--proxies", f"{PROXY_LOG_DIR}/known_proxies.txt",
+                "--servers", f"{SERVER_LOG_DIR}/known_servers.txt",
             ], stdout=open(f"{PROXY_LOG_DIR}/proxy{i}.log", "w"), stderr=subprocess.STDOUT)
+            
+            # Write PID to file
+            pid_w.write(f"{proc.pid}\n")
 
-    print("Initial 2 proxies started (matching `make proxies`).")
+    print(f"Initial 2 proxies started (PIDs saved to {PROXY_PIDS_FILE}).")
 
 
 def add_server():
     """
     Matches: make additional_server
-    Starts a new server with the next available index and port.
-    Always points to the seed server at port 5555.
     """
     os.makedirs(SERVER_LOG_DIR, exist_ok=True)
 
@@ -69,46 +97,48 @@ def add_server():
 
     next_id = len(existing) + 1
     server_name = f"Server_{next_id}"
-    next_port = SERVER_BASE_PORT + next_id
-
+    next_port = SERVER_BASE_PORT + next_id - 1
     logfile = f"{SERVER_LOG_DIR}/server{next_id}.log"
 
     print(f"Starting {server_name} on port {next_port}")
 
-    # store known servers in a file for later use
-    known_servers_file = f"{SERVER_LOG_DIR}/known_servers.txt"
-    with open(known_servers_file, "a") as f:
+    # Append to known_servers.txt
+    with open(f"{SERVER_LOG_DIR}/known_servers.txt", "a") as f:
         f.write(f"{server_name}:{next_port}\n")
 
-    subprocess.Popen([
-        "python3", "-m", "src.server.main",
-        "--id", server_name,
+    proc = subprocess.Popen([
+        sys.executable, "-m", "src.server.main",
         "--port", str(next_port),
         "--db", f"server_{next_id}",
         "--servers", f"{SERVER_LOG_DIR}/known_servers.txt",
     ], stdout=open(logfile, "w"), stderr=subprocess.STDOUT)
 
+    # Append new PID to the PID file
+    with open(SERVER_PIDS_FILE, "a") as pid_f:
+        pid_f.write(f"{proc.pid}\n")
 
-    print(f"{server_name} launched (matching `make additional_server`).")
+    print(f"{server_name} launched (PID: {proc.pid}).")
 
 
 def remove_server(server_name):
     """
-    Sends a REMOVE_SERVER message to the target server using the same logic
-    as notify_server():
-    - 3 retries
-    - exponential backoff (1s → 2s → 4s → max 8s)
+    Sends a REMOVE_SERVER message to the target server.
+    NOTE: This shuts down the server gracefully. The PID will remain in the file
+    until 'make clean' runs, but 'kill' handles stale PIDs gracefully.
     """
-
-    # Determine target server port from known servers file
     target_port = None
-    with open(f"{SERVER_LOG_DIR}/known_servers.txt", "r") as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith(f"{server_name}:"):
-                _, port_str = line.split(":")
-                target_port = int(port_str)
-                break
+    
+    try:
+        with open(f"{SERVER_LOG_DIR}/known_servers.txt", "r") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(f"{server_name}:"):
+                    _, port_str = line.split(":")
+                    target_port = int(port_str)
+                    break
+    except FileNotFoundError:
+        print(f"[Admin] ERROR: known_servers.txt not found.")
+        return
 
     if target_port is None:
         print(f"[Admin] ERROR: Server {server_name} not found in known servers.")
@@ -118,7 +148,7 @@ def remove_server(server_name):
     remove_message = message.serialize()
 
     retries = 3
-    base_timeout = 1000  # 1 second
+    base_timeout = 1000
     timeout = base_timeout
 
     ctx = zmq.Context()
@@ -129,37 +159,37 @@ def remove_server(server_name):
     poller.register(sock, zmq.POLLIN)
 
     for attempt in range(1, retries + 1):
-        print(f"[Admin] Sending REMOVE_SERVER to {target_port} "
-              f"(attempt {attempt}/{retries})")
-
-        # Send the message
+        print(f"[Admin] Sending REMOVE_SERVER to {target_port} (attempt {attempt}/{retries})")
         sock.send(remove_message)
 
-        # Wait for a reply or timeout
         socks = dict(poller.poll(timeout))
 
-        if sock in socks and socks[sock] == zmq.POLLIN :
-            # SUCCESS
+        if sock in socks and socks[sock] == zmq.POLLIN:
             reply = sock.recv()
             if reply:
                 reply_msg = Message(json_str=reply)
                 if reply_msg.msg_type == MessageType.REMOVE_SERVER_ACK:
                     print(f"[Admin] Server {target_port} acknowledged removal.")
+                    
+                    # Update the topology file
                     with open(f"{SERVER_LOG_DIR}/known_servers.txt", "r") as f:
                         lines = f.readlines()
-                    lines = [line for line in lines if not line.startswith(f"{server_name}:")]
                     with open(f"{SERVER_LOG_DIR}/known_servers.txt", "w") as f:
-                        f.writelines(lines)
+                        for line in lines:
+                            if not line.startswith(f"{server_name}:"):
+                                f.write(line)
+                    
+                    sock.close()
+                    ctx.term()
                     return
-                else:
-                    print(f"[Admin] Server {target_port} sent unexpected reply: {reply_msg.msg_type}")
         else:
             print(f"[Admin] No reply from {target_port}, retrying...")
-        timeout = min(timeout * 2, 8000)  # exponential backoff
+        
+        timeout = min(timeout * 2, 8000)
 
-    # FAILED AFTER ALL RETRIES
     print(f"[Admin] Server {target_port} DID NOT RESPOND after {retries} attempts.")
-
+    sock.close()
+    ctx.term()
 
 
 def main():

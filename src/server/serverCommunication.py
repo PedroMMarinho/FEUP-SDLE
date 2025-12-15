@@ -1,30 +1,27 @@
 import hashlib
 import zmq
+from src.common.crdt.improved.ShoppingList import ShoppingList
 from src.common.messages.messages import Message, MessageType
 from src.common.threadPool.threadPool import ThreadPool
 import time 
 import random 
+import json
 
 GOSSIP_FANOUT = 2
-REPLICA_COUNT = 3
+REPLICA_COUNT = 2
 GOSSIP_INTERVAL = 0.5
 
 class Server():
     def __init__(self, port, hash):
         self.hash = hash
         self.port = port
-        self.socket = None
+        self.stage_for_removal = False
 
-    def setSocket(self, socket):
-        self.socket = socket
 
 class Proxy():
     def __init__(self, port):
         self.port = port
-        self.socket = None
 
-    def setSocket(self, socket):
-        self.socket = socket
 
 
 class ServerCommunicator:
@@ -51,6 +48,7 @@ class ServerCommunicator:
         self.setup_server_interface_socket()
         print(f"[System] Starting server on port {self.port}...")
         self.setup_servers()
+        self.setup_proxies()
         self.thread_pool.submit(self.gossip_loop)
         self.thread_pool.submit(self.heartbeat)
         self.loop()
@@ -60,14 +58,18 @@ class ServerCommunicator:
         self.server_interface_socket.bind(f"tcp://localhost:{self.port}")
         self.poller.register(self.server_interface_socket, zmq.POLLIN)
 
+    def setup_proxies(self):
+        print("[Network] Setting up known proxies...")
+        for port, _ in self.known_proxies:
+            proxy = Proxy(port)
+            self.proxies.append(proxy)
+
+
     def setup_servers(self):
         print("[Network] Setting up known servers...")
         for port, hash in self.known_servers:
             server = Server(port, hash)
             self.servers.append(server)
-            socket = self.context.socket(zmq.DEALER)
-            socket.connect(f"tcp://localhost:{port}")
-            server.setSocket(socket)
 
 
     def gossip_loop(self):
@@ -79,7 +81,12 @@ class ServerCommunicator:
             except Exception as e:
                 print(f"[Gossip] Error in loop: {e}")
 
-    def gossip(self):   
+    def gossip(self):
+        for server in list(self.servers):
+            if server.stage_for_removal:
+                self.servers.remove(server)
+                print(f"[Gossip] Server {server.port} removed from gossip list")
+           
         server_ports = [str(s.port) for s in self.servers]
         server_ports.append(str(self.port))
         
@@ -91,8 +98,12 @@ class ServerCommunicator:
             "hash_ring_version": self.hash_ring_version
         }
 
-        message = Message(MessageType.GOSSIP, payload)
-        serialized_msg = message.serialize()
+        if self.hash_ring_version == 1:
+            self.message = Message(MessageType.GOSSIP_INTRODUCTION, payload)
+        else:
+            self.message = Message(MessageType.GOSSIP, payload)
+
+        serialized_msg = self.message.serialize()
 
         targets = []
         if self.servers:
@@ -100,10 +111,15 @@ class ServerCommunicator:
         if self.proxies:
             targets.extend(random.sample(self.proxies, min(len(self.proxies), GOSSIP_FANOUT)))
 
+        print(f"[Gossip] Sending GOSSIP to  {[t.port for t in targets]}")
         for node in targets:
             try:
-                if node.socket:
-                    node.socket.send(serialized_msg)
+                sock = self.context.socket(zmq.DEALER)
+                sock.connect(f"tcp://localhost:{node.port}")
+                if sock:
+                    sock.send(serialized_msg)
+                    time.sleep(0.1) # Good code :D
+                    sock.close(linger=0)
             except Exception as e:
                 print(f"[Gossip] Failed to send to {node.port}: {e}")
 
@@ -113,8 +129,8 @@ class ServerCommunicator:
         while self.running:
             socks = dict(self.poller.poll(1000))
             for sock in socks:
-                if socks[sock] == zmq.POLLIN: # idk
-                    if sock == self.server_interface_socket: # idk
+                if socks[sock] == zmq.POLLIN: 
+                    if sock == self.server_interface_socket: 
                         self.handle_server_interface_socket()
 
         self.context.destroy()
@@ -129,6 +145,8 @@ class ServerCommunicator:
         match message.msg_type:
             case MessageType.GOSSIP:
                 self.thread_pool.submit(self.handle_gossip, identity, message.payload)
+            case MessageType.GOSSIP_INTRODUCTION:
+                self.thread_pool.submit(self.handle_gossip_introduction, identity, message.payload)
             case MessageType.REQUEST_FULL_LIST:
                 self.thread_pool.submit(self.handle_request_full_list, identity, message.payload)
             case MessageType.REPLICA:
@@ -137,9 +155,124 @@ class ServerCommunicator:
                 self.thread_pool.submit(self.handle_sent_full_list, identity, message.payload)
             case MessageType.HINTED_HANDOFF:
                 self.thread_pool.submit(self.handle_hinted_handoff, identity, message.payload)
+            case MessageType.REMOVE_SERVER:
+                self.thread_pool.submit(self.shutdown, identity, message.payload)
+            case MessageType.GOSSIP_SERVER_REMOVAL:
+                self.thread_pool.submit(self.handle_gossip_server_removal, identity, message.payload)
             case _:
                 print(f"[Network] Unknown message type: {message.msg_type}")
 
+
+    def handle_gossip_server_removal(self, identity, payload):
+        print(f"[Network] Handling GOSSIP_SERVER_REMOVAL from {identity}: {payload}")
+
+        all_lists = payload["all_lists"]
+        port = payload["port"]
+
+        for shop_list in all_lists:
+            obj = ShoppingList.from_json(shop_list)
+            shop_list_replica_id = json.loads(shop_list).get('replicaID', 0)
+            self.storage.save_list(obj,name=obj.name, replica_id=shop_list_replica_id)
+
+        for s in list(self.servers):  # copy to avoid mutation issues
+            if str(s.port) == str(port):
+                s.stage_for_removal = True
+                self.hash_ring_version += 1
+                print(f"[Gossip] Server {port} removed due to GOSSIP_SERVER_REMOVAL")
+                break
+
+
+        ack_message = Message(msg_type=MessageType.GOSSIP_SERVER_REMOVAL_ACK, payload={})
+        self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
+
+        print(f"[Network] Sent GOSSIP_SERVER_REMOVAL_ACK to {identity}")
+
+    def shutdown(self, identity, payload):
+        print("[System] Initiating graceful shutdown...")
+
+        shoppingLists = self.storage.get_all_lists()
+
+        message = Message(
+            msg_type=MessageType.GOSSIP_SERVER_REMOVAL,
+            payload={
+                "all_lists": [shop_list.to_json() for shop_list in shoppingLists],
+                "port": self.port
+            }
+        )
+        serialized_msg = message.serialize()
+
+        if not self.servers:
+            print("[System] No peers available to offload data.")
+            return False
+
+        # 2. Configuration for the Handoff Loop
+        needed_acks = min(len(self.servers), 2)  
+        successful_recipients = set()            
+        
+        max_total_attempts = 3                  
+        attempt_count = 0
+
+        # 3. Dynamic Retry Loop
+        while len(successful_recipients) < needed_acks and attempt_count < max_total_attempts:
+            attempt_count += 1
+
+            candidates = [s for s in self.servers if s.port not in successful_recipients and s.port != self.port]
+            
+            if not candidates:
+                print("[Handoff] No more unique candidates available.")
+                break
+
+            target_server = random.choice(candidates)
+            
+            print(f"[Handoff] Attempt {attempt_count}/{max_total_attempts}: "
+                  f"Trying to offload to {target_server.port}...")
+
+            s = self.context.socket(zmq.DEALER)
+            try:
+                s.connect(f"tcp://localhost:{target_server.port}")
+                s.send(serialized_msg)
+                
+                print(f"[Handoff] Sent GOSSIP_SERVER_REMOVAL to {target_server.port}, awaiting ACK...")
+
+                poller = zmq.Poller()
+                poller.register(s, zmq.POLLIN)
+                socks = dict(poller.poll(1500))
+
+                if s in socks and socks[s] == zmq.POLLIN:
+                    reply_bytes = s.recv()
+                    reply = Message(json_str=reply_bytes)
+
+                    if reply.msg_type == MessageType.GOSSIP_SERVER_REMOVAL_ACK:
+                        print(f"[Handoff] SUCCESS: Data offloaded to {target_server.port}")
+                        successful_recipients.add(target_server.port)
+                    else:
+                        print(f"[Handoff] Unexpected reply from {target_server.port}: {reply.msg_type}")
+                else:
+                    print(f"[Handoff] TIMEOUT: No reply from {target_server.port}. Switching target...")
+
+            except Exception as e:
+                print(f"[Handoff] Socket error with {target_server.port}: {e}")
+            finally:
+                s.close()
+
+        if len(successful_recipients) > 0:
+            print(f"[Handoff] Handoff complete. Data stored on: {list(successful_recipients)}")
+            print("[Handoff] Clearing local storage...")
+
+            ack_message = Message(msg_type=MessageType.REMOVE_SERVER_ACK, payload={})
+            self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
+
+
+            for shop_list in shoppingLists:
+                self.storage.delete_list(shop_list.uuid, shop_list.replicaID)
+
+            print("[System] Shutdown complete.")
+            self.running = False
+
+            return True
+        else:
+            print("[Handoff] CRITICAL: Failed to offload data to any server after max attempts.")
+            return False
 
     def connect_to_server(self, port, hash_val=None):
         if any(str(s.port) == str(port) for s in self.servers):
@@ -149,49 +282,25 @@ class ServerCommunicator:
             hash_val = hashlib.sha256(f"server_{port}".encode()).hexdigest()
 
         server = Server(port, hash_val)
-        try:
-            sock = self.context.socket(zmq.DEALER)
-            sock.connect(f"tcp://localhost:{port}")
-            server.setSocket(sock)
-            self.servers.append(server)
-        except Exception as e:
-            print(f"[Error] Failed to connect to server {port}: {e}")
-
+        self.servers.append(server)
+        
     def connect_to_proxy(self, port):
         if any(str(p.port) == str(port) for p in self.proxies):
             return
 
         proxy = Proxy(port)
-        try:
-            sock = self.context.socket(zmq.DEALER)
-            sock.connect(f"tcp://localhost:{port}")
-            proxy.setSocket(sock)
-            self.proxies.append(proxy)
-        except Exception as e:
-            print(f"[Error] Failed to connect to proxy {port}: {e}")
+        self.proxies.append(proxy)
 
     def remove_server(self, port):
         for s in list(self.servers):  # copy to avoid mutation issues
             if str(s.port) == str(port):
-                try:
-                    if hasattr(s, "socket") and s.socket is not None:
-                        s.socket.close(linger=0)
-                except Exception as e:
-                    print(f"[Warning] Failed closing server socket {port}: {e}")
-
-                self.servers.remove(s)
-                print(f"[Gossip] Server {port} removed")
+                s.stage_for_removal = True
+                print(f"[Gossip] Server {port} staged for removal")
                 return
             
     def remove_proxy(self, port):
         for p in list(self.proxies):
             if str(p.port) == str(port):
-                try:
-                    if hasattr(p, "socket") and p.socket is not None:
-                        p.socket.close(linger=0)
-                except Exception as e:
-                    print(f"[Warning] Failed closing proxy socket {port}: {e}")
-
                 self.proxies.remove(p)
                 print(f"[Gossip] Proxy {port} removed")
                 return
@@ -206,27 +315,28 @@ class ServerCommunicator:
         # Process Servers
         my_server_ports = {str(s.port) for s in self.servers}
         my_server_ports.add(str(self.port))
+        my_proxy_ports = {str(p.port) for p in self.proxies}
 
         if hash_ring_version < self.hash_ring_version:
             return # Ignore outdated gossip
         
         if hash_ring_version == self.hash_ring_version:
-            self.hash_ring_version = hash_ring_version
+            if set(incoming_servers) == my_server_ports and set(incoming_proxies) == {str(p.port) for p in self.proxies}:
+                return 
+
             for p in incoming_servers:
                 if str(p) not in my_server_ports:
-                    print(f"[Gossip] Discovered new Server: {p}")
-                    self.connect_to_server(int(p))
+                    #print(f"[Gossip] Discovered new Server: {p}")
+                    self.connect_to_server(p)
 
-            # Process Proxies
-            my_proxy_ports = {str(p.port) for p in self.proxies}
 
             for p in incoming_proxies:
                 if str(p) not in my_proxy_ports:
-                    print(f"[Gossip] Discovered new Proxy: {p}")
-                    self.connect_to_proxy(int(p))
-            hash_ring_version += 1
-        if hash_ring_version > self.hash_ring_version:
-            print(f"[Gossip] Detected newer hash ring version {hash_ring_version}, updating from {self.hash_ring_version}")
+                    #print(f"[Gossip] Discovered new Proxy: {p}")
+                    self.connect_to_proxy(p)
+            self.hash_ring_version += 1
+        elif hash_ring_version > self.hash_ring_version:
+            #print(f"[Gossip] Detected newer hash ring version {hash_ring_version}, updating from {self.hash_ring_version}")
             self.hash_ring_version = hash_ring_version
 
             incoming_servers_set = {str(p) for p in incoming_servers}
@@ -238,7 +348,7 @@ class ServerCommunicator:
                     servers_to_remove.append(s)
 
             for s in servers_to_remove:
-                print(f"[Gossip] Removing stale Server: {s.port}")
+                #print(f"[Gossip] Removing stale Server: {s.port}")
                 self.remove_server(s.port)
 
             proxies_to_remove = []
@@ -247,19 +357,19 @@ class ServerCommunicator:
                     proxies_to_remove.append(p)
 
             for p in proxies_to_remove:
-                print(f"[Gossip] Removing stale Proxy: {p.port}")
+                #print(f"[Gossip] Removing stale Proxy: {p.port}")
                 self.remove_proxy(p.port)
 
 
             for p in incoming_servers:
                 if str(p) not in my_server_ports:
-                    print(f"[Gossip] Discovered new Server: {p}")
-                    self.connect_to_server(int(p))
+                    #print(f"[Gossip] Discovered new Server: {p}")
+                    self.connect_to_server(p)
 
             for p in incoming_proxies:
                 if str(p) not in my_proxy_ports:
-                    print(f"[Gossip] Discovered new Proxy: {p}")
-                    self.connect_to_proxy(int(p))
+                    #print(f"[Gossip] Discovered new Proxy: {p}")
+                    self.connect_to_proxy(p)
 
 
     def heartbeat(self):
@@ -268,29 +378,38 @@ class ServerCommunicator:
         while self.running:
             all_lists = self.storage.get_all_lists() # TODO could be more optimized 
             lists_by_server = {}
+            port_server_map = {str(s.port): s for s in self.servers}
             for shop_list in all_lists: 
-                intended_servers = self.get_intended_servers(shop_list['uuid'])
-                for intended_server in intended_servers:
-                    if intended_server.port is not self.port:
-                        if intended_server.port not in lists_by_server:
-                            lists_by_server[intended_server.port] = []
-                        lists_by_server[intended_server.port].append(shop_list)
+                intended_server = self.get_intended_server(shop_list)
+                if intended_server.port != self.port:
+                    if intended_server.port not in lists_by_server:
+                        lists_by_server[intended_server.port] = []
+                    lists_by_server[intended_server.port].append(shop_list)
+                    print(f"[Heartbeat] replica: {shop_list.isReplica} list {shop_list.uuid} intended for server {intended_server.port}")
 
             for server in lists_by_server:
-                self.thread_pool.submit(self.send_hinted_handoff, server, lists_by_server[server])
+                if len(lists_by_server[server]) > 0:
+                    self.thread_pool.submit(self.send_hinted_handoff, port_server_map[server], lists_by_server[server])
             time.sleep(10)
 
 
     def handle_request_full_list(self, identity, payload): # TODO missing quorum logic
         print(f"[Network] Handling REQUEST_FULL_LIST from {identity}: {payload}")
-        full_list = self.storage.get_list_by_id(payload["uuid"])
+        full_list = self.storage.get_list_by_id(payload["list_id"])
+
+        if full_list and hasattr(full_list, 'isReplica'):
+            delattr(full_list, 'isReplica')
+
+        shopping_list = full_list.to_json() if full_list else None
+
+
         message = None
         if full_list is None:
-            print(f"[Network] No list found with ID {payload['uuid']}")
+            print(f"[Network] No list found with ID {payload['list_id']}")
             message = Message(msg_type=MessageType.REQUEST_FULL_LIST_NACK, payload={})
 
         else:
-            message = Message(msg_type=MessageType.REQUEST_FULL_LIST_ACK, payload={"full_list": full_list})
+            message = Message(msg_type=MessageType.REQUEST_FULL_LIST_ACK, payload={"shopping_list": shopping_list})
 
         self.server_interface_socket.send_multipart([identity, message.serialize()])
         print(f"[Network] Sent {message.msg_type} to {identity}")
@@ -299,8 +418,9 @@ class ServerCommunicator:
         print(f"[Network] Handling REPLICA from {identity}")
 
         replica_item = payload["replica_list"]
-
-        self.storage.save_list(replica_item, is_replica=True)
+        replica_id = payload["replicaID"]
+        
+        self.storage.save_list(ShoppingList.from_json(replica_item), is_replica=True, replica_id=replica_id, name=json.loads(replica_item).get('name', None))
 
         ack_message = Message(msg_type=MessageType.REPLICA_ACK, payload={})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
@@ -308,41 +428,29 @@ class ServerCommunicator:
         print(f"[Network] Sent REPLICA_ACK to {identity}")
 
 
-    def get_hashring_neighbors(self):
-        sorted_servers = sorted(self.servers + [Server(self.port, self.hash)], 
-                                key=lambda s: s.hash)
+#    def get_hashring_neighbors(self):
+#        sorted_servers = sorted(self.servers, 
+#                                key=lambda s: s.hash)
+#
+#        # Only 1 server → no neighbors
+#        if len(sorted_servers) == 1:
+#            return None, None
+#
+#        current_index = next(i for i, s in enumerate(sorted_servers) if s.port == self.port)
+#
+#        left_neighbor  = sorted_servers[current_index - 1]
+#        right_neighbor = sorted_servers[(current_index + 1) % len(sorted_servers)]
+#
+#        return left_neighbor, right_neighbor
 
-        # Only 1 server → no neighbors
-        if len(sorted_servers) == 1:
-            return None, None
 
-        current_index = next(i for i, s in enumerate(sorted_servers) if s.port == self.port)
-
-        left_neighbor  = sorted_servers[current_index - 1]
-        right_neighbor = sorted_servers[(current_index + 1) % len(sorted_servers)]
-
-        return left_neighbor, right_neighbor
-
-
-    def get_next_servers(self, server):
-
+    def get_intended_server(self, shop_list):
         sorted_servers = sorted(
-            self.servers, key=lambda s: s.hash
-        )
-        current_index = next(i for i, s in enumerate(sorted_servers) if s.port == server.port)
-        next_servers = []
-        for i in range(1, min(REPLICA_COUNT, len(sorted_servers)) + 1):
-            next_server = sorted_servers[(current_index + i) % len(sorted_servers)]
-            next_servers.append(next_server)
-        return next_servers
-
-    def get_intended_servers(self, shop_list):
-        sorted_servers = sorted(
-            self.servers + [Server(self.port, self.hash)],
+            self.servers,
             key=lambda s: s.hash
         )
 
-        list_hash = hashlib.sha256(shop_list['uuid'].encode()).hexdigest()
+        list_hash = hashlib.sha256(shop_list.uuid.encode()).hexdigest()
 
         hash_server = None
 
@@ -351,21 +459,28 @@ class ServerCommunicator:
                 hash_server = server
                 break
 
-        if shop_list['isReplica']:
-            return self.get_next_servers(hash_server)
+        if shop_list.isReplica:
+            hash_server_index = sorted_servers.index(hash_server)
+            return sorted_servers[(hash_server_index + shop_list.replicaID) % len(sorted_servers)]
         else:
-            return [hash_server] if hash_server else []
+            return hash_server
 
 
     def handle_sent_full_list(self, identity, payload):
         print(f"[Network] Handling SENT_FULL_LIST from {identity}: {payload}")
-        full_list = payload["full_list"]
+        full_list = payload["shopping_list"]
+        shopping_list = ShoppingList.from_json(full_list)
 
-        self.storage.save_list(full_list, is_replica=False)
+        self.storage.save_list(shopping_list, is_replica=False, name=shopping_list.name, replica_id=0)
+        merged_list = self.storage.get_list_by_id(shopping_list.uuid, 0)
 
-        self.thread_pool.submit(self.send_replica, full_list)
+        
+        self.thread_pool.submit(self.send_replica, merged_list)
 
-        ack_message = Message(msg_type=MessageType.SENT_FULL_LIST_ACK, payload={})
+        if hasattr(merged_list, 'isReplica'):
+            delattr(merged_list, 'isReplica')
+
+        ack_message = Message(msg_type=MessageType.SENT_FULL_LIST_ACK, payload={"shopping_list": merged_list.to_json()})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
         print(f"[Network] Sent SENT_FULL_LIST_ACK to {identity}")
 
@@ -373,12 +488,12 @@ class ServerCommunicator:
         ring = sorted(self.servers, key=lambda s: s.hash)
         ring_len = len(ring)
 
-        list_hash = hashlib.sha256(shop_list['uuid'].encode()).hexdigest()
+        list_hash = hashlib.sha256(shop_list.uuid.encode()).hexdigest()
 
         primary_index = None
         for i, srv in enumerate(ring):
-            if srv.hash >= list_hash:
-                primary_index = i
+            if list_hash <= srv.hash:
+                primary_index = (i + 1) % ring_len
                 break
         if primary_index is None:
             primary_index = 0  
@@ -391,8 +506,8 @@ class ServerCommunicator:
 
         while successes < REPLICA_COUNT and attempted < ring_len:
             server = ring[index]
-
-            ok = self._try_send_replica_to_server(server, shop_list)
+            replicaID = successes + 1  
+            ok = self._try_send_replica_to_server(server, shop_list, replicaID)
             results.append((server, ok))
 
             if ok:
@@ -401,23 +516,22 @@ class ServerCommunicator:
             attempted += 1
             index = (index + 1) % ring_len
 
-        return results
     
-    def _try_send_replica_to_server(self, server, replica_list):
-        print(f"[Network] Attempting to send {len(replica_list)} items to server {server.port}")
+    def _try_send_replica_to_server(self, server, replica_list, replicaID):
+        print(f"[Network] Attempting to send {len(replica_list.items)} items to server {server.port}")
+
+        if hasattr(replica_list, 'isReplica'):
+            delattr(replica_list, 'isReplica')
 
         replica_message = Message(
             msg_type=MessageType.REPLICA,
-            payload={"replica_list": replica_list}
+            payload={"replica_list": replica_list.to_json(), "replicaID": replicaID}
         )
 
         # Connect or reuse socket
-        if server.socket is None:
-            server_socket = self.context.socket(zmq.DEALER)
-            server_socket.connect(f"tcp://localhost:{server.port}")
-            server.setSocket(server_socket)
-        else:
-            server_socket = server.socket
+        server_socket = self.context.socket(zmq.DEALER)
+        server_socket.connect(f"tcp://localhost:{server.port}")
+
 
         retries = 3
         timeout = 1000  # ms
@@ -426,7 +540,7 @@ class ServerCommunicator:
         poller.register(server_socket, zmq.POLLIN)
 
         for attempt in range(1, retries + 1):
-            print(f"[Replica] Sending REPLICA x{len(replica_list)} to {server.port} "
+            print(f"[Replica] Sending REPLICA x{len(replica_list.items)} to {server.port} "
                 f"(attempt {attempt}/{retries})")
 
             server_socket.send(replica_message.serialize())
@@ -437,6 +551,7 @@ class ServerCommunicator:
 
                 if reply.msg_type == MessageType.REPLICA_ACK:
                     print(f"[Replica] ACK received from {server.port}")
+                    server_socket.close(linger=0)
                     return True
 
                 print(f"[Replica] Unexpected reply {reply.msg_type}")
@@ -447,22 +562,31 @@ class ServerCommunicator:
             timeout = min(8000, timeout * 2)
 
         print(f"[Replica] FAILED after retries → {server.port}")
+        server_socket.close(linger=0)
         return False
 
 
 
     def send_hinted_handoff(self, server, shop_lists):
+        
         for shop_list in shop_lists:
-            print(f"[Network] Sending HINTED_HANDOFF to server {server.port} for list {shop_list['uuid']}")
+            print(f"[Network] Sending HINTED_HANDOFF to server {server.port} for list {shop_list.uuid}")
+            print(f"test: {shop_list.isReplica}")
 
         replica_lists = []
         main_lists = []
 
         for shop_list in shop_lists:
-            if not shop_list['isReplica']:
-                main_lists.append(shop_list)
+            if not shop_list.isReplica:
+                if hasattr(shop_list, 'isReplica'):
+                    delattr(shop_list, 'isReplica')
+                main_lists.append(shop_list.to_json())
             else:
-                replica_lists.append(shop_list)
+                if hasattr(shop_list, 'isReplica'):
+                    delattr(shop_list, 'isReplica')
+                replica_lists.append(shop_list.to_json())
+
+        
 
         message = Message(
             msg_type=MessageType.HINTED_HANDOFF,
@@ -473,12 +597,9 @@ class ServerCommunicator:
         )
 
         # Create / reuse socket
-        if server.socket is None:
-            s = self.context.socket(zmq.DEALER)
-            s.connect(f"tcp://localhost:{server.port}")
-            server.setSocket(s)
-        else:
-            s = server.socket
+        s = self.context.socket(zmq.DEALER)
+        s.connect(f"tcp://localhost:{server.port}")
+
 
         retries = 3
         timeout = 1000  # ms
@@ -487,7 +608,7 @@ class ServerCommunicator:
         poller.register(s, zmq.POLLIN)
 
         for attempt in range(1, retries + 1):
-            print(f"[Handoff] Sending SENT_FULL_LIST to {server.port} "
+            print(f"[Handoff] Sending HINTED_HANDOFF to {server.port} "
                 f"(attempt {attempt}/{retries})")
 
             s.send(message.serialize())
@@ -502,7 +623,8 @@ class ServerCommunicator:
                     print(f"[Handoff] HINTED_HANDOFF_ACK received from {server.port}")
 
                     for shop_list in shop_lists:
-                        self.storage.delete_list(shop_list['uuid'])
+                        self.storage.delete_list(shop_list.uuid, shop_list.replicaID)
+                    s.close(linger=0)
                     return True
 
                 print(f"[Handoff] Unexpected reply: {reply.msg_type}")
@@ -514,6 +636,7 @@ class ServerCommunicator:
 
         # FAILED → queue it
         print(f"[Handoff] FAILED to send hinted handoff to {server.port}, queueing action")
+        s.close(linger=0)
         return False
 
     def handle_hinted_handoff(self, identity, payload):
@@ -523,15 +646,46 @@ class ServerCommunicator:
         replica_lists = payload["replica_lists"]
 
         for shop_list in main_lists:
-            self.storage.save_list(shop_list, is_replica=False)
+            obj = ShoppingList.from_json(shop_list)
+            replica_id = json.loads(shop_list).get('replicaID', 0)
+            self.storage.save_list(obj, is_replica=False, name=obj.name, replica_id=replica_id)
 
         for shop_list in replica_lists:
-            self.storage.save_list(shop_list, is_replica=True)
-
+            obj = ShoppingList.from_json(shop_list)
+            replica_id = json.loads(shop_list).get('replicaID', 0)
+            self.storage.save_list(obj, is_replica=True, name=obj.name, replica_id=replica_id)
+            
         ack_message = Message(msg_type=MessageType.HINTED_HANDOFF_ACK, payload={})
         self.server_interface_socket.send_multipart([identity, ack_message.serialize()])
 
         print(f"[Network] Sent HINTED_HANDOFF_ACK to {identity}")
+
+    def handle_gossip_introduction(self, identity, payload):
+        incoming_servers = payload.get("servers", [])
+        incoming_proxies = payload.get("proxies", [])
+        hash_ring_version = payload.get("hash_ring_version", 1)
+
+        # Process Servers
+        my_server_ports = {str(s.port) for s in self.servers}
+        my_proxy_ports = {str(p.port) for p in self.proxies}
+        my_proxy_ports.add(str(self.port))
+
+        # always merge introductions
+        #print(f"[Gossip] Handling gossip introduction from {identity}: servers={incoming_servers},proxies={incoming_proxies}, version={hash_ring_version}")
+        changed = False
+        for p in incoming_servers:
+            if str(p) not in my_server_ports:
+                #print(f"[Gossip] Discovered new Server: {p}")
+                self.connect_to_server(p)
+                changed = True
+        for p in incoming_proxies:
+            if str(p) not in my_proxy_ports:
+                #print(f"[Gossip] Discovered new Proxy: {p}")
+                self.connect_to_proxy(p)
+                changed = True
+
+        if changed:
+            self.hash_ring_version = max(self.hash_ring_version, hash_ring_version) + 1
 
 
 

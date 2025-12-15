@@ -3,7 +3,7 @@ import hashlib
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from src.server.serverCommunication import ServerCommunicator
-from src.server.storage import ServerStorage
+from src.server.storage import ShoppingListStorage
 
 
 
@@ -60,7 +60,7 @@ def main():
         "port": PG_PORT
     }
 
-    storage = ServerStorage(db_config)
+    storage = ShoppingListStorage(db_config)
     storage.initialize_schema()
 
     known_servers = []
@@ -71,7 +71,7 @@ def main():
                     line = line.strip()
                     if line:
                         name, port_str = line.split(":")
-                        known_servers.append((port_str, hashlib.sha256(f"server_{port_str}".encode()).hexdigest()))
+                        known_servers.append((str(port_str), hashlib.sha256(f"server_{port_str}".encode()).hexdigest()))
         except Exception as e:
             print(f"[Warning] Could not read known servers file: {e}")
 
@@ -87,7 +87,7 @@ def main():
                     line = line.strip()
                     if line:
                         name, port_str = line.split(":")
-                        known_proxies.append((port_str, hashlib.sha256(f"proxy_{port_str}".encode()).hexdigest()))
+                        known_proxies.append((str(port_str), hashlib.sha256(f"proxy_{port_str}".encode()).hexdigest()))
         except Exception as e:
             print(f"[Warning] Could not read known proxies file: {e}")
     

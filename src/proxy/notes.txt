@@ -1,6 +1,2 @@
-To do: 
-
-Connection to server ( idk how )
-Hash ring update ( subcribe? )
-Endpoints for client 
-
+Fixes needed: 
+Oops i forgot to add the subscribe port to proxies and dont forget that subscribe messages must have the topic at their start otherwise no one will get them

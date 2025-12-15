@@ -3,9 +3,10 @@ from src.common.crdt.improved.ORSet import ORSet
 import json
 
 class ShoppingList:
-    def __init__(self, list_id):
-        self.id = list_id        
-        self.clock = 0            
+    def __init__(self, list_uuid,name=None):
+        self.uuid = list_uuid        
+        self.clock = 0
+        self.name = name            
         self.items = {} 
 
     def _tick(self):
@@ -13,7 +14,7 @@ class ShoppingList:
         return self.clock
 
     def _get_tag(self):
-        return f"{self.id}:{self.clock}"
+        return f"{self.uuid}:{self.clock}"
 
     def add_item(self, name, needed_amount=1, acquired_amount=0):
         self._tick()
@@ -25,8 +26,8 @@ class ShoppingList:
                 "acquired": PNCounter(),
                 "existence": ORSet() 
             }
-            self.items[name]["needed"].change(self.id, needed_amount)
-            self.items[name]["acquired"].change(self.id, acquired_amount)
+            self.items[name]["needed"].change(self.uuid, needed_amount)
+            self.items[name]["acquired"].change(self.uuid, acquired_amount)
 
         self.items[name]["existence"].add(name, tag)
 
@@ -38,12 +39,12 @@ class ShoppingList:
     def update_needed(self, name, amount):
         self._tick()
         if name in self.items:
-            self.items[name]["needed"].change(self.id, amount)
+            self.items[name]["needed"].change(self.uuid, amount)
 
     def update_acquired(self, name, amount):
         self._tick()
         if name in self.items:
-            self.items[name]["acquired"].change(self.id, amount)
+            self.items[name]["acquired"].change(self.uuid, amount)
 
     def get_visible_items(self):
         visible_list = {}
@@ -108,7 +109,7 @@ class ShoppingList:
                 return data
         
         data = json.loads(json_str)
-        sl = ShoppingList(list_id=data['id'])
+        sl = ShoppingList(list_uuid=data['uuid'], name=data.get('name'))
         sl.clock = data['clock']
         
         for name, item_data in data.get('items', {}).items():

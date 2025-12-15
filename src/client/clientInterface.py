@@ -28,14 +28,12 @@ class ClientInterface:
     def create_list(self, name):
         list_uuid = str(uuid.uuid4())
         
-        sl = ShoppingList(list_id=self.client_id)
-
-        sl.uuid = list_uuid 
+        sl = ShoppingList(list_uuid, name)
 
         self.storage.save_list(sl, name)
         print(f"Created list '{name}' with ID: {list_uuid}")
 
-        self.thread_pool.submit(self.communicator.send_full_list, sl.uuid, sl.to_json())
+        self.thread_pool.submit(self.communicator.send_full_list, sl)
         self.communicator.subscribe_to_list(sl.uuid)
 
     def show_lists(self):
@@ -47,9 +45,9 @@ class ClientInterface:
         for r in rows:
             print(f"ID: {r[0]} | Name: {r[1]}")
 
-    def show_list_content(self, list_id):
+    def show_list_content(self, list_uuid):
         """Displays the items using the CRDT's get_visible_items method."""
-        sl = self.storage.get_list_by_id(list_id)
+        sl = self.storage.get_list_by_id(list_uuid)
         
         if not sl:
             print("Error: List not found.")
@@ -57,7 +55,7 @@ class ClientInterface:
 
         visible_items = sl.get_visible_items()
         
-        print(f"\n--- CONTENT OF {list_id} ---")
+        print(f"\n--- CONTENT OF {list_uuid} ---")
         if not visible_items:
             print("[Empty]")
             return
@@ -68,8 +66,8 @@ class ClientInterface:
             status = "[x]" if acquired >= needed else "[ ]"
             print(f" {status} {name} (Need: {needed}) | (Got: {acquired})")
 
-    def add_item(self, list_id, item_name, quantity=1, acquired=0):
-        sl = self.storage.get_list_by_id(list_id)
+    def add_item(self, list_uuid, item_name, quantity=1, acquired=0):
+        sl = self.storage.get_list_by_id(list_uuid)
         if not sl:
             print("Error: List not found.")
             return
@@ -86,12 +84,12 @@ class ClientInterface:
 
         sl.add_item(name=item_name, needed_amount=qty_needed, acquired_amount=acquired)
         
-        self.storage.save_list(sl)
+        self.storage.save_list(sl,sl.name)
         print(f"Added '{item_name}' (Need: {qty_needed}) | (Got: {acquired}) to list.")
-        self.thread_pool.submit(self.communicator.send_full_list, list_id, sl.to_json())
+        self.thread_pool.submit(self.communicator.send_full_list, sl)
 
-    def update_item(self, list_id, item_name, needed, acquired=None):
-        sl = self.storage.get_list_by_id(list_id)
+    def update_item(self, list_uuid, item_name, needed, acquired=None):
+        sl = self.storage.get_list_by_id(list_uuid)
         if not sl:
             print("Error: List not found.")
             return
@@ -120,26 +118,26 @@ class ClientInterface:
         if diff_acquired != 0:
             sl.update_acquired(item_name, diff_acquired)
 
-        self.storage.save_list(sl)
+        self.storage.save_list(sl, sl.name)
         print(f"Updated '{item_name}' -> Need: {target_needed}, Got: {target_acquired}")
-        self.thread_pool.submit(self.communicator.send_full_list, list_id, sl.to_json())
+        self.thread_pool.submit(self.communicator.send_full_list, sl)
 
-    def delete_item(self, list_id, item_name):
-        sl = self.storage.get_list_by_id(list_id)
+    def delete_item(self, list_uuid, item_name):
+        sl = self.storage.get_list_by_id(list_uuid)
         if not sl:
             print("Error: List not found.")
             return
 
         sl.remove_item(item_name)
 
-        self.storage.save_list(sl)
+        self.storage.save_list(sl, sl.name)
         print(f"Deleted '{item_name}'.")
-        self.thread_pool.submit(self.communicator.send_full_list, list_id, sl.to_json())
+        self.thread_pool.submit(self.communicator.send_full_list, sl)
 
-    def delete_list (self, list_id):
-        self.storage.delete_list(list_id)
-        self.communicator.unsubscribe_from_list(list_id)
-        print(f"Deleted local list with ID: {list_id}")
+    def delete_list (self, list_uuid):
+        self.storage.delete_list(list_uuid)
+        self.communicator.unsubscribe_from_list(list_uuid)
+        print(f"Deleted local list with ID: {list_uuid}")
 
     def loop(self):
         print(f"--- Shopping List Client ({self.client_id}) ---")
@@ -165,11 +163,11 @@ class ClientInterface:
                     case 'c' if len(args) >= 1:
                         self.create_list(args[0])
                     case 'd' if len(args) >= 2:
-                        self.delete_item(list_id=args[0], item_name=args[1])
+                        self.delete_item(list_uuid=args[0], item_name=args[1])
                     case 'u' if len(args) >= 4:
-                        self.update_item(list_id=args[0], item_name=args[1], needed=args[2], acquired=args[3])
+                        self.update_item(list_uuid=args[0], item_name=args[1], needed=args[2], acquired=args[3])
                     case 'u' if len(args) >= 3:
-                        self.update_item(list_id=args[0], item_name=args[1], needed=args[2])
+                        self.update_item(list_uuid=args[0], item_name=args[1], needed=args[2])
                     case 'a' if len(args) >= 4:
                         print( args)
                         self.add_item(args[0], args[1], quantity=args[2], acquired=args[3])
@@ -178,12 +176,12 @@ class ClientInterface:
                     case 'a' if len(args) == 2:
                         self.add_item(args[0], args[1], quantity=1)
                     case 'r' if len(args) >= 1:
-                        list_id = args[0]
-                        print(f"Requesting full list for ID: {list_id} from network...")
-                        self.communicator.request_full_list(list_id)
+                        list_uuid = args[0]
+                        print(f"Requesting full list for ID: {list_uuid} from network...")
+                        self.communicator.request_full_list(list_uuid)
                     case 'delete' if len(args) >= 1:
-                        list_id = args[0]
-                        self.delete_list(list_id)
+                        list_uuid = args[0]
+                        self.delete_list(list_uuid)
                     case _:
                         print("Invalid command.")
 

@@ -7,43 +7,30 @@ import random
 class Proxy():
     def __init__(self, port):
         self.port = port
-        self.socket = None
-
-    def setSocket(self, socket):
-        self.socket = socket
-
 
 class ClientCommunicator():
-    def __init__(self, db_path, client_id, known_proxies, storage):
+    def __init__(self, db_path, known_proxies, storage):
         self.db_path = db_path
-        self.client_id = client_id
         self.known_proxies = known_proxies
         self.context = zmq.Context()
-
+        self.poller = zmq.Poller()
         self.running = True
         self.storage = storage
-        self.daemon = True  # Kills this thread if the main app closes
         self.proxies = []
-        self.subscriber = None
+        self.subscriber = self.context.socket(zmq.SUB)
         self.init_proxies()
-        self.init_subscriber_socket()
 
     def init_proxies(self):
         for port in self.known_proxies:
             proxy = Proxy(port)
             self.proxies.append(proxy)
-            proxy_socket = self.context.socket(zmq.DEALER)
-            proxy_socket.connect(f"tcp://localhost:{port}")
-            proxy.setSocket(proxy_socket)
-    
-    def init_subscriber_socket(self):
-        self.subscriber = self.context.socket(zmq.SUB)
-        self.subscriber.setsockopt_string(zmq.SUBSCRIBE, "")
-
-        for proxy in self.proxies:
-            pub_port = proxy.port + 1  # convention: PUB = DEALER + 1
+            pub_port = port + 1  # convention: PUB = DEALER + 1
             self.subscriber.connect(f"tcp://localhost:{pub_port}")
             print(f"[Network] Subscribed to proxy PUB {pub_port}")
+
+
+ 
+            
         
        
 
@@ -65,10 +52,12 @@ class ClientCommunicator():
                 socks = dict(poller.poll(1000))
 
                 if self.subscriber in socks:
-                    raw = self.subscriber.recv()
+                    topic, raw = self.subscriber.recv_multipart()
                     message = Message(json_str=raw)
 
-                    self._handle_incoming_message(message)
+                    if message.msg_type == MessageType.LIST_UPDATE:
+
+                        self._handle_list_update(message.payload)
 
             except zmq.ContextTerminated:
                 break
@@ -84,7 +73,8 @@ class ClientCommunicator():
         Attempt to send a full list to a single proxy with retries.
         Returns True on ACK, False otherwise.
         """
-        socket = proxy.socket
+        socket = self.context.socket(zmq.DEALER)
+        socket.connect(f"tcp://localhost:{proxy.port}")
         poller = zmq.Poller()
         poller.register(socket, zmq.POLLIN)
 
@@ -104,11 +94,13 @@ class ClientCommunicator():
                 reply = Message(json_str=socket.recv())
 
                 if reply.msg_type == MessageType.SENT_FULL_LIST_ACK:
+                    socket.close(linger=0)
                     print(f"[Network] ACK received from proxy {proxy.port}")
-                    return True
+                    return reply.payload
                 if reply.msg_type == MessageType.SENT_FULL_LIST_NACK:
-                    print(f"[Network] NACK received from proxy {proxy.port}: {reply.payload['error']}")
-                    return False
+                    socket.close(linger=0)
+                    print(f"[Network] NACK received from proxy {proxy.port}")
+                    return None
                 else:
                     print(
                         f"[Network] Unexpected reply from {proxy.port}: "
@@ -118,9 +110,10 @@ class ClientCommunicator():
                 print(f"[Network] No reply from {proxy.port}, retrying...")
 
             timeout = min(8000, timeout * 2)
-
+            
+        socket.close(linger=0)
         print(f"[Network] Proxy {proxy.port} failed after retries")
-        return False
+        return None
 
 
     def send_full_list(self,shopping_list):
@@ -128,17 +121,16 @@ class ClientCommunicator():
         Sends a full list to proxies with retries and proxy failover.
         """
 
-        list_id = shopping_list.uuid
+        list_uuid = shopping_list.uuid
 
         message = Message(
             msg_type=MessageType.SENT_FULL_LIST,
             payload={
-                "list_id": list_id,
                 "shopping_list": shopping_list.to_json()
             }
         )
 
-        print(f"[Network] Sending full list '{list_id}' to proxies")
+        print(f"[Network] Sending full list '{list_uuid}' to proxies")
 
         # Shuffle proxies so load is distributed
         proxies = self.proxies[:]
@@ -147,38 +139,37 @@ class ClientCommunicator():
         for proxy in proxies:
             print(f"[Network] Trying proxy {proxy.port}")
 
-            success = self._try_send_full_list_to_proxy(proxy, message)
+            result = self._try_send_full_list_to_proxy(proxy, message)
 
-            if success:
+            if result is not None:
                 print(
-                    f"[Network] Full list '{list_id}' successfully sent "
+                    f"[Network] Full list '{list_uuid}' successfully sent "
                     f"via proxy {proxy.port}"
                 )
-
-                self.storage.save_list(shopping_list, not_sent=False)
-
-                return True
+                crdt_obj = ShoppingList.from_json(result["shopping_list"])
+                self.storage.save_list(crdt_obj, not_sent=False, name=crdt_obj.name)
+                return
 
             print(f"[Network] Switching proxy...")
 
         print(
-            f"[Network] FAILED: Could not send full list '{list_id}' "
+            f"[Network] FAILED: Could not send full list '{list_uuid}' "
             f"to any proxy"
         )
-        self.storage.save_list(shopping_list, not_sent=True)
-        return False
+        self.storage.save_list(shopping_list, not_sent=True, name=shopping_list.name)
     
     def _try_request_full_list_from_proxy(self,proxy,message,retries=3,base_timeout=1000):
         """
         Request a full shopping list from a single proxy with retries.
         Returns the CRDT payload on success, None on failure.
         """
-        socket = proxy.socket
+        socket = self.context.socket(zmq.DEALER)
+        socket.connect(f"tcp://localhost:{proxy.port}")
         poller = zmq.Poller()
         poller.register(socket, zmq.POLLIN)
 
         timeout = base_timeout
-
+        # TODO IS THE PLAYLOAD'list_uuid'?
         for attempt in range(1, retries + 1):
             print(
                 f"[Network] Requesting FULL_LIST '{message.payload['list_id']}' "
@@ -193,12 +184,14 @@ class ClientCommunicator():
             if socket in socks and socks[socket] == zmq.POLLIN:
                 reply = Message(json_str=socket.recv())
 
-                if reply.msg_type == MessageType.SENT_FULL_LIST_ACK:
+                if reply.msg_type == MessageType.REQUEST_FULL_LIST_ACK:
+                    socket.close(linger=0)
                     print(f"[Network] Full list received from proxy {proxy.port}")
                     return reply.payload    
 
-                if reply.msg_type == MessageType.SENT_FULL_LIST_NACK:
-                    print(f"[Network] Error received from proxy {proxy.port}: {reply.payload['error']}")
+                if reply.msg_type == MessageType.REQUEST_FULL_LIST_NACK:
+                    socket.close(linger=0)
+                    print(f"[Network] Error received from proxy {proxy.port}")
                     return None
 
 
@@ -207,21 +200,22 @@ class ClientCommunicator():
 
             timeout = min(8000, timeout * 2)
 
+        socket.close(linger=0)
         print(f"[Network] Proxy {proxy.port} failed after retries")
         return None
 
     
-    def request_full_list(self, list_id):
+    def request_full_list(self, list_uuid):
         """
         Requests a full shopping list from proxies with retries and failover.
         Returns the CRDT payload on success, None on failure.
         """
         message = Message(
             msg_type=MessageType.REQUEST_FULL_LIST,
-            payload={"list_id": list_id}
+            payload={"list_id": list_uuid}
         )
 
-        print(f"[Network] Requesting full list '{list_id}'")
+        print(f"[Network] Requesting full list '{list_uuid}'")
 
         proxies = self.proxies[:]
         random.shuffle(proxies)
@@ -233,18 +227,18 @@ class ClientCommunicator():
 
             if result is not None:
                 print(
-                    f"[Network] Full list '{list_id}' received "
+                    f"[Network] Full list '{list_uuid}' received "
                     f"via proxy {proxy.port}"
                 )
-
-                self.storage.save_list(ShoppingList.from_json(result), not_sent=False)
-                self.subscribe_to_list(list_id)
+                crdt = ShoppingList.from_json(result["shopping_list"])
+                self.storage.save_list(crdt, not_sent=False, name=crdt.name)
+                self.subscribe_to_list(list_uuid)
                 return 
 
             print(f"[Network] Switching proxy...")
 
         print(
-            f"[Network] FAILED: Could not retrieve full list '{list_id}' "
+            f"[Network] FAILED: Could not retrieve full list '{list_uuid}' "
             f"from any proxy"
         )
         return None
@@ -262,11 +256,21 @@ class ClientCommunicator():
         # For now, just return the default proxy address
         return random.choice(self.proxies)
     
-    def subscribe_to_list(self, list_id):
-        self.subscriber.setsockopt_string(zmq.SUBSCRIBE, list_id)
-        print(f"[Network] Subscribed to updates for list {list_id}")
+    def subscribe_to_list(self, list_uuid):
+        self.subscriber.setsockopt_string(zmq.SUBSCRIBE, list_uuid)
+        print(f"[Network] Subscribed to updates for list {list_uuid}")
     
-    def unsubscribe_from_list(self, list_id):
-        self.subscriber.setsockopt_string(zmq.UNSUBSCRIBE, list_id)
-        print(f"[Network] Unsubscribed from updates for list {list_id}")
+    def unsubscribe_from_list(self, list_uuid):
+        self.subscriber.setsockopt_string(zmq.UNSUBSCRIBE, list_uuid)
+        print(f"[Network] Unsubscribed from updates for list {list_uuid}")
+
+    def _handle_list_update(self, payload):
+        crdt_json = payload['shopping_list']
+        crdt_json_obj = ShoppingList.from_json(crdt_json)
+        print(f"[Network] Received LIST_UPDATE for list {crdt_json_obj.uuid}")
+
+        self.storage.save_list(crdt_json_obj, name=crdt_json_obj.name)
+
+        print(f"[Network] Merged LIST_UPDATE for list {crdt_json_obj.uuid} into local storage")
+
 
