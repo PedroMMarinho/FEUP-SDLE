@@ -123,6 +123,8 @@ class ClientCommunicator():
 
         list_uuid = shopping_list.uuid
 
+        #print(f"[Network] Sending full list '{shopping_list.to_json()}' to proxies")
+
         message = Message(
             msg_type=MessageType.SENT_FULL_LIST,
             payload={

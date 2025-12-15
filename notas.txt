@@ -1,3 +1,20 @@
 timestamp = numero da operacao .... Tempo logico ou seja , primiero numero da operacao 1,2,3,4...(Type int)
 
 mesmo numero de proxys e servidores
+
+comecar os servidores com listas random e depois mostrar que ficam todos direitos
+
+dois clientes a alterar ao mesmo tempo as listas
+
+Primeira cena
+------
+1 - Como initializar programa correr `make install` e`make init`. Meter que é preciso docker para correr o programa
+2 - Referir o que initial setup cria 2 proxys e 5 servidores que ja se conhecem inicialmente
+------
+3 - Criar um cliente e criar uma lista 
+4 - Criar um novo cliente e pedir a lista. Mostrar que partilham a mesma lista
+5 - Mudar a lista com qualquer um dos clientes e verificar no outro cliente que a lista foi alterada
+------
+6 - remover um servidor e mostrar que o sistema continua a funcionar (mostrar que as listas passam de servidor para outro atraves dos logs)
+7 - Adicionar um servidor e mostrar que o sistema continua a funcionar (mostrar que as listas passam de servidor para outro atraves dos logs)
+------

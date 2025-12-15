@@ -82,11 +82,11 @@ class ClientInterface:
         except ValueError:
             acquired = 0
 
-        sl.add_item(name=item_name, needed_amount=qty_needed, acquired_amount=acquired)
+        sl.add_item(name=item_name, client_id=self.client_id, needed_amount=qty_needed, acquired_amount=acquired)
         
         self.storage.save_list(sl,sl.name)
         print(f"Added '{item_name}' (Need: {qty_needed}) | (Got: {acquired}) to list.")
-        self.thread_pool.submit(self.communicator.send_full_list, sl)
+        self.thread_pool.submit(self.communicator.send_full_list, self.storage.get_list_by_id(list_uuid))
 
     def update_item(self, list_uuid, item_name, needed, acquired=None):
         sl = self.storage.get_list_by_id(list_uuid)
@@ -113,14 +113,14 @@ class ClientInterface:
         diff_acquired = target_acquired - current_acquired
 
         if diff_needed != 0:
-            sl.update_needed(item_name, diff_needed)
+            sl.update_needed(item_name, diff_needed, self.client_id)
         
         if diff_acquired != 0:
-            sl.update_acquired(item_name, diff_acquired)
+            sl.update_acquired(item_name, diff_acquired, self.client_id)
 
         self.storage.save_list(sl, sl.name)
         print(f"Updated '{item_name}' -> Need: {target_needed}, Got: {target_acquired}")
-        self.thread_pool.submit(self.communicator.send_full_list, sl)
+        self.thread_pool.submit(self.communicator.send_full_list, self.storage.get_list_by_id(list_uuid))
 
     def delete_item(self, list_uuid, item_name):
         sl = self.storage.get_list_by_id(list_uuid)
@@ -128,11 +128,11 @@ class ClientInterface:
             print("Error: List not found.")
             return
 
-        sl.remove_item(item_name)
+        sl.remove_item(item_name, self.client_id)
 
         self.storage.save_list(sl, sl.name)
         print(f"Deleted '{item_name}'.")
-        self.thread_pool.submit(self.communicator.send_full_list, sl)
+        self.thread_pool.submit(self.communicator.send_full_list, self.storage.get_list_by_id(list_uuid))
 
     def delete_list (self, list_uuid):
         self.storage.delete_list(list_uuid)

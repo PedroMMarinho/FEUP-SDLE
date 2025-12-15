@@ -14,6 +14,8 @@ class GCounter:
 
     def merge(self, other):
         all_keys = set(self.counts.keys()) | set(other.counts.keys())
+        #print(f"Merging GCounter: self={self.counts}, other={other.counts}")
+        #print(f"All keys for merge: {all_keys}")
         for key in all_keys:
             self.counts[key] = max(
                 self.counts.get(key, 0),

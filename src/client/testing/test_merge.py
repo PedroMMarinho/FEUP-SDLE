@@ -29,7 +29,6 @@ def test_stale_read_merge():
     print(f"1. Creating shared list: {list_id}")
     
     initial_list = ShoppingList(list_id)
-    initial_list.add_item("Bread", 1) 
     storage.save_list(initial_list, name="Merge Test List")
 
     # 3. SIMULATE "STALE READS"
@@ -40,36 +39,29 @@ def test_stale_read_merge():
     
     # 4. ALICE MAKES A CHANGE
     print("3. Alice adds 'Milk' (locally).")
-    alice_list_copy.add_item("Milk", 2)
+    alice_list_copy.add_item("Milk", "Alice", 3)
 
-    # 5. BOB MAKES A CHANGE 
-    print("4. Bob adds 'Eggs' (locally).")
-    bob_list_copy.add_item("Eggs", 12)
+    print("4. Bob adds 'Milk' (locally).")
+    bob_list_copy.add_item("Milk", "Bob", 12)
 
-    # 6. ALICE SAVES FIRST
-    print("5. Alice saves to DB.")
-    storage.save_list(alice_list_copy)
+    # 5. BOTH SAVE THEIR CHANGES
+    print("5. Alice saves her changes to storage.")
+    storage.save_list(alice_list_copy, name="Merge Test List")
+    print("6. Bob saves his changes to storage.")
+    storage.save_list(bob_list_copy, name="Merge Test List")
 
-    # 7. BOB SAVES SECOND 
-    print("6. Bob saves to DB (This triggers the merge).")
-    storage.save_list(bob_list_copy)
-
-    # 8. VERIFY RESULTS
-    print("\n7. Verifying final state in DB...")
+    # 6. VERIFY MERGE RESULT
+    print("7. Retrieving merged list from storage.")
     final_list = storage.get_list_by_id(list_id)
     visible_items = final_list.get_visible_items()
-    
-    print(f"   [Result] Items found: {list(visible_items.keys())}")
+    print(f"Visible items after merge: {visible_items}")
 
-    success = True
-    if "Bread" not in visible_items: success = False
-    if "Milk" not in visible_items: success = False
-    if "Eggs" not in visible_items: success = False
+    print(final_list.to_json())
+    print(final_list.get_visible_items())
 
-    if success:
-        print("\n \u2705 TEST PASSED: All items are present after merge.")
-    else:
-        print("\n \u274C TEST FAILED: Some items were lost.")
+    expected_needed = 15
+    actual_needed = visible_items.get("Milk", {}).get("needed", 0)
+    assert actual_needed == expected_needed, f"Merge failed: expected {expected_needed}, got {actual_needed}"
 
 if __name__ == "__main__":
     try:
