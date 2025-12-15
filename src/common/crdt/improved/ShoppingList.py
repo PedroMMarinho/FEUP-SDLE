@@ -45,7 +45,7 @@ class ShoppingList:
 
     def update_acquired(self, name, amount, client_id):
         self._tick()
-        print(f"Updating acquired for items: {self.items.keys()}")
+        #print(f"Updating acquired for items: {self.items.keys()}")
         if name in self.items:
             self.items[name]["acquired"].change(client_id, amount)
 
@@ -62,9 +62,9 @@ class ShoppingList:
     def merge(self, other):
         self.clock = max(self.clock, other.clock)
         all_keys = set(self.items.keys()) | set(other.items.keys())
-        print(f"[ShoppingList] Merging shoppiing lists. all_keys: {all_keys}")
-        print(f"[ShoppingList] Self items before merge: {self.items.keys()}")
-        print(f"[ShoppingList] Other items to merge: {other.items.keys()}")
+        #print(f"[ShoppingList] Merging shoppiing lists. all_keys: {all_keys}")
+        #print(f"[ShoppingList] Self items before merge: {self.items.keys()}")
+        #print(f"[ShoppingList] Other items to merge: {other.items.keys()}")
         for name in all_keys:
     
             if name not in self.items:

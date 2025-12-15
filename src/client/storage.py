@@ -105,7 +105,7 @@ class ShoppingListStorage:
                             db_crdt_json = json.loads(db_crdt_json)
                         
                         db_list = self._reconstruct_crdt(db_crdt_json)
-                        print(f"[Storage] Merging local list '{list_uuid}' with database version.")
+                        #print(f"[Storage] Merging local list '{list_uuid}' with database version.")
                         shop_list.merge(db_list)
 
                     crdt_blob = json.dumps(self._crdt_to_dict(shop_list))
