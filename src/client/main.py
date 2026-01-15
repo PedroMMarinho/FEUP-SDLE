@@ -1,15 +1,16 @@
 import argparse
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+import os
 from src.client.clientInterface import ClientInterface
 from src.client.clientCommunication import ClientCommunicator
 from src.client.storage import ShoppingListStorage
 
 # --- LOCAL POSTGRES CONFIG ---
-PG_USER = "postgres"
-PG_PASSWORD = "password"  
-PG_HOST = "localhost"
-PG_PORT = "5432"
+PG_USER = os.environ.get("DB_USER", "postgres")
+PG_PASSWORD = os.environ.get("DB_PASSWORD", "password")
+PG_HOST = os.environ.get("DB_HOST", "localhost")
+PG_PORT = os.environ.get("DB_PORT", "5432") 
 
 def ensure_database_exists(db_name):
     """Checks if the specific client DB exists. If not, creates it."""

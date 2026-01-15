@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import psycopg2
+import os
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from src.server.serverCommunication import ServerCommunicator
 from src.server.storage import ShoppingListStorage
@@ -8,10 +9,10 @@ from src.server.storage import ShoppingListStorage
 
 
 # --- LOCAL POSTGRES CONFIG ---
-PG_USER = "postgres"
-PG_PASSWORD = "password"  
-PG_HOST = "localhost"
-PG_PORT = "5432"
+PG_USER = os.environ.get("DB_USER", "postgres")
+PG_PASSWORD = os.environ.get("DB_PASSWORD", "password")
+PG_HOST = os.environ.get("DB_HOST", "localhost")
+PG_PORT = os.environ.get("DB_PORT", "5432") 
 
 def ensure_database_exists(db_name):
     """Checks if the specific client DB exists. If not, creates it."""

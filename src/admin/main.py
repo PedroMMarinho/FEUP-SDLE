@@ -4,24 +4,104 @@ import os
 import zmq
 import json
 import sys
+import time
 from src.common.messages.messages import MessageType, Message
 
+# --- Configuration Constants ---
+DB_USER_BASE_PORT = 7000    # Clients start here
+DB_SERVER_BASE_PORT = 8000  # Servers start here
 
 SERVER_BASE_PORT = 5555
 PROXY_BASE_PORT = 6000
 PROXY_INCREMENT = 2
+
 SERVER_LOG_DIR = "src/server/server_logs"
 PROXY_LOG_DIR = "src/proxy/proxy_logs"
+DB_REG_DIR = "src/db"
 
-# New PID file constants
+# PID files
 SERVER_PIDS_FILE = os.path.join(SERVER_LOG_DIR, "server_pids.txt")
 PROXY_PIDS_FILE = os.path.join(PROXY_LOG_DIR, "proxy_pids.txt")
+DB_REGISTRY_FILE = os.path.join(DB_REG_DIR, "db_registry.txt")
+
+DB_PASSWORD = "password"
+
+
+def run_command(cmd, check=True):
+    """Helper to run shell commands quietly."""
+    return subprocess.run(cmd, shell=True, check=check, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def provision_db_container(identifier, base_port_start):
+    """
+    Generic function to spin up a Postgres container for EITHER a User OR a Server.
+    Returns: (int) The assigned port.
+    """
+    os.makedirs(DB_REG_DIR, exist_ok=True)
+
+    registry = {}
+    
+    if os.path.exists(DB_REGISTRY_FILE):
+        with open(DB_REGISTRY_FILE, "r") as f:
+            for line in f:
+                line = line.strip()
+                if ":" in line:
+                    u, p = line.split(":")
+                    registry[u] = int(p)
+
+    if identifier in registry:
+        port = registry[identifier]
+        print(f"[Admin] Found existing DB port {port} for {identifier}", file=sys.stderr)
+    else:
+        used_ports_in_range = [p for p in registry.values() if p >= base_port_start and p < base_port_start + 1000]
+        if used_ports_in_range:
+            port = max(used_ports_in_range) + 1
+        else:
+            port = base_port_start
+        
+        with open(DB_REGISTRY_FILE, "a") as f:
+            f.write(f"{identifier}:{port}\n")
+        print(f"[Admin] Assigned new DB port {port} to {identifier}", file=sys.stderr)
+
+    container_name = f"shopping-db-{identifier}"
+    
+    check_exists = run_command(f"docker ps -aq -f name={container_name}", check=False)
+    container_id = check_exists.stdout.decode().strip()
+
+    if container_id:
+        check_running = run_command(f"docker ps -q -f name={container_name}", check=False)
+        if not check_running.stdout.decode().strip():
+            print(f"[Admin] Container {container_name} stopped. Starting...", file=sys.stderr)
+            run_command(f"docker start {container_name}")
+            time.sleep(2) 
+        else:
+            print(f"[Admin] Container {container_name} is already running.", file=sys.stderr)
+    else:
+        print(f"[Admin] Creating new container {container_name} on port {port}...", file=sys.stderr)
+        run_command(
+            f"docker run --name {container_name} "
+            f"-e POSTGRES_PASSWORD={DB_PASSWORD} "
+            f"-p {port}:5432 -d postgres"
+        )
+        print(f"[Admin] Waiting for Database to initialize...", file=sys.stderr)
+        time.sleep(3) 
+
+    return port
+
+
+def setup_db(user_id):
+    """
+    Called by Makefile for Clients.
+    Prints the port to stdout so Makefile captures it.
+    """
+    port = provision_db_container(user_id, DB_USER_BASE_PORT)
+    print(port)
+
 
 def initial_setup():
     """
     Matches: make servers
-    Starts: Server_1..5 and Proxy_1..2
-    Stores PIDs in text files for clean shutdown.
+    Starts: Server_1..5 (With DBs) and Proxy_1..2
     """
     os.makedirs(SERVER_LOG_DIR, exist_ok=True)
     os.makedirs(PROXY_LOG_DIR, exist_ok=True)
@@ -36,9 +116,7 @@ def initial_setup():
         if os.path.exists(fpath):
             os.remove(fpath)
 
-    # --- 1. GENERATE CONFIGURATION FILES FIRST ---
     print("Generating network topology...")
-    
     with open(f"{SERVER_LOG_DIR}/known_servers.txt", "w") as f:
         for i in range(1, 6):
             port = SERVER_BASE_PORT + i - 1
@@ -49,24 +127,32 @@ def initial_setup():
             port = PROXY_BASE_PORT + PROXY_INCREMENT*i - 1
             f.write(f"Proxy_{i}:{port}\n")
 
-    # --- 2. START SERVERS AND TRACK PIDS ---
     print("Starting Servers...")
     with open(SERVER_PIDS_FILE, "w") as pid_f:
         for i in range(1, 6):
-            port = SERVER_BASE_PORT + i - 1
+            server_name = f"Server_{i}"
+            server_port = SERVER_BASE_PORT + i - 1
+            
+            db_port = provision_db_container(server_name, DB_SERVER_BASE_PORT)
+            
+            server_env = os.environ.copy()
+            server_env["DB_HOST"] = "localhost"
+            server_env["DB_PORT"] = str(db_port)
+            server_env["DB_USER"] = "postgres"     
+            server_env["DB_PASSWORD"] = DB_PASSWORD
+
             proc = subprocess.Popen([
                 sys.executable, "-u", "-m", "src.server.main", 
-                "--port", str(port),
-                "--db", f"server_{i}",
+                "--port", str(server_port),
+                "--db", server_name, 
                 "--servers", f"{SERVER_LOG_DIR}/known_servers.txt"
-            ], stdout=open(f"{SERVER_LOG_DIR}/server{i}.log", "w"), stderr=subprocess.STDOUT)
+            ], env=server_env, stdout=open(f"{SERVER_LOG_DIR}/server{i}.log", "w"), stderr=subprocess.STDOUT)
             
-            # Write PID to file
             pid_f.write(f"{proc.pid}\n")
             
-    print(f"Initial 5 servers started (PIDs saved to {SERVER_PIDS_FILE}).")
+    print(f"Initial 5 servers started (DBs on ports 8000+). PIDs in {SERVER_PIDS_FILE}.")
 
-    # --- 3. START PROXIES AND TRACK PIDS ---
+    # --- 3. START PROXIES ---
     print("Starting Proxies...")
     with open(PROXY_PIDS_FILE, "w") as pid_w:
         for i in range(1, 3):
@@ -78,10 +164,9 @@ def initial_setup():
                 "--servers", f"{SERVER_LOG_DIR}/known_servers.txt",
             ], stdout=open(f"{PROXY_LOG_DIR}/proxy{i}.log", "w"), stderr=subprocess.STDOUT)
             
-            # Write PID to file
             pid_w.write(f"{proc.pid}\n")
 
-    print(f"Initial 2 proxies started (PIDs saved to {PROXY_PIDS_FILE}).")
+    print(f"Initial 2 proxies started.")
 
 
 def add_server():
@@ -100,34 +185,37 @@ def add_server():
     next_port = SERVER_BASE_PORT + next_id - 1
     logfile = f"{SERVER_LOG_DIR}/server{next_id}.log"
 
-    print(f"Starting {server_name} on port {next_port}")
+    print(f"Provisioning {server_name} on port {next_port}...")
 
-    # Append to known_servers.txt
+    db_port = provision_db_container(server_name, DB_SERVER_BASE_PORT)
+
     with open(f"{SERVER_LOG_DIR}/known_servers.txt", "a") as f:
         f.write(f"{server_name}:{next_port}\n")
+
+    server_env = os.environ.copy()
+    server_env["DB_HOST"] = "localhost"
+    server_env["DB_PORT"] = str(db_port)
+    server_env["DB_USER"] = "postgres"
+    server_env["DB_PASSWORD"] = DB_PASSWORD
 
     proc = subprocess.Popen([
         sys.executable, "-m", "src.server.main",
         "--port", str(next_port),
-        "--db", f"server_{next_id}",
+        "--db", server_name,
         "--servers", f"{SERVER_LOG_DIR}/known_servers.txt",
-    ], stdout=open(logfile, "w"), stderr=subprocess.STDOUT)
+    ], env=server_env, stdout=open(logfile, "w"), stderr=subprocess.STDOUT)
 
-    # Append new PID to the PID file
     with open(SERVER_PIDS_FILE, "a") as pid_f:
         pid_f.write(f"{proc.pid}\n")
 
-    print(f"{server_name} launched (PID: {proc.pid}).")
+    print(f"{server_name} launched (PID: {proc.pid}, DB Port: {db_port}).")
 
 
 def remove_server(server_name):
     """
     Sends a REMOVE_SERVER message to the target server.
-    NOTE: This shuts down the server gracefully. The PID will remain in the file
-    until 'make clean' runs, but 'kill' handles stale PIDs gracefully.
     """
     target_port = None
-    
     try:
         with open(f"{SERVER_LOG_DIR}/known_servers.txt", "r") as f:
             for line in f:
@@ -144,12 +232,13 @@ def remove_server(server_name):
         print(f"[Admin] ERROR: Server {server_name} not found in known servers.")
         return
 
+
+
     message = Message(msg_type=MessageType.REMOVE_SERVER, payload={})
     remove_message = message.serialize()
 
     retries = 3
-    base_timeout = 1000
-    timeout = base_timeout
+    timeout = 1000
 
     ctx = zmq.Context()
     sock = ctx.socket(zmq.DEALER)
@@ -195,9 +284,11 @@ def remove_server(server_name):
 def main():
     parser = argparse.ArgumentParser(description="Shopping List Admin Tool")
     parser.add_argument("--action", required=True,
-                        choices=["initial_setup", "add_server", "remove_server"])
+                        choices=["initial_setup", "add_server", "remove_server", "setup_db"])
     parser.add_argument("--server_name", type=str,
                         help="Name of the server to add/remove")
+    parser.add_argument("--user_id", type=str,
+                        help="User ID for DB setup")
 
     args = parser.parse_args()
 
@@ -213,6 +304,12 @@ def main():
                 print("ERROR: --server_name required for remove_server")
                 return
             remove_server(args.server_name)
+            
+        case "setup_db":
+            if not args.user_id:
+                print("ERROR: --user_id required for setup_db", file=sys.stderr)
+                sys.exit(1)
+            setup_db(args.user_id)
 
 
 if __name__ == "__main__":

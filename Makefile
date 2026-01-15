@@ -1,17 +1,15 @@
 # --- Variables ---
 PYTHON = venv/bin/python3
 SRC_DIR = src
-DB_CONTAINER_NAME = shopping-db
-DB_PASSWORD = password
-DB_PORT = 5432
 SERVER_LOG_DIR = $(SRC_DIR)/server/server_logs
 PROXY_LOG_DIR = $(SRC_DIR)/proxy/proxy_logs
+DB_REGISTRY_FILE = $(SRC_DIR)/db/db_registry.txt
 ID ?= User_Default
 
 all: help
 
 # --- SETUP & INFRASTRUCTURE ---
-init: db servers
+init: stop-servers servers
 	@echo "--------------------------------------------------"
 	@echo "System Initialized Successfully!"
 	@echo "  1. Dependencies installed."
@@ -26,30 +24,24 @@ init: db servers
 install:
 	pip install -r requirements.txt
 
-db:
-	@echo "Checking for database container..."
-	@docker start $(DB_CONTAINER_NAME) 2>/dev/null || \
-	docker run --name $(DB_CONTAINER_NAME) \
-		-e POSTGRES_PASSWORD=$(DB_PASSWORD) \
-		-p $(DB_PORT):5432 \
-		-d postgres
-	@echo "Waiting for Postgres to be ready..."
-	@sleep 5
-	@echo "Database is running!"
 
-stop-db:
-	@docker stop $(DB_CONTAINER_NAME)
-	@echo "Database stopped."
-
-clean-db: stop-db
-	@docker rm $(DB_CONTAINER_NAME)
-	@echo "Database container removed."
+clean-dbs:
+	@echo "Stopping all shopping-db containers..."
+	@docker ps -a --filter "name=shopping-db" -q | xargs -r docker stop
+	@docker ps -a --filter "name=shopping-db" -q | xargs -r docker rm
+	@# FIX: Point to the correct location of the registry file
+	@rm -f $(DB_REGISTRY_FILE)
+	@echo "Database containers and registry removed."
 
 # --- RUNNING CLIENTS ---
 # Usage: make client ID=User_A
 
 client:
-	PYTHONPATH=$(PWD) $(PYTHON) -m src.client.main \
+	@echo "--- [CLIENT] Initializing for $(ID) ---"
+	@# capture the port printed by python to stdout
+	$(eval DB_PORT := $(shell $(PYTHON) -m src.admin.main --action setup_db --user_id "$(ID)"))
+	@echo "--- [CLIENT] DB Ready on Port $(DB_PORT). Launching App... ---"
+	@PYTHONPATH=$(PWD) DB_HOST=localhost DB_PORT=$(DB_PORT) $(PYTHON) -m src.client.main \
 		--id "$(ID)" \
 		--db "client_$(ID).db" \
 		--proxies $(PROXY_LOG_DIR)/known_proxies.txt
@@ -57,7 +49,7 @@ client:
 # --- RUNNING SERVERS VIA ADMIN TOOL ---
 servers:
 	mkdir -p $(SERVER_LOG_DIR) $(PROXY_LOG_DIR)
-	PYTHONPATH=$(PWD) $(PYTHON) -m  src.admin.main --action initial_setup
+	PYTHONPATH=$(PWD) $(PYTHON) -m src.admin.main --action initial_setup
 
 add-server:
 	mkdir -p $(SERVER_LOG_DIR)
@@ -65,7 +57,7 @@ add-server:
 
 remove-server:
 	@if [ -z "$(SERVER_NAME)" ]; then \
-		echo "ERROR: Please provide SERVER_NAME, e.g. make remove_server SERVER_NAME=Server_3"; \
+		echo "ERROR: Please provide SERVER_NAME, e.g. make remove-server SERVER_NAME=Server_3"; \
 		exit 1; \
 	fi
 	PYTHONPATH=$(PWD) $(PYTHON) -m src.admin.main --action remove_server --server_name $(SERVER_NAME)
@@ -79,14 +71,14 @@ clean-logs:
 stop-servers:
 	@echo "Stopping servers and proxies..."
 	@if [ -f src/server/server_logs/server_pids.txt ]; then \
-        echo "Killing Servers..."; \
-        xargs kill < src/server/server_logs/server_pids.txt 2>/dev/null || true; \
-        rm src/server/server_logs/server_pids.txt; \
+		echo "Killing Servers..."; \
+		xargs kill < src/server/server_logs/server_pids.txt 2>/dev/null || true; \
+		rm src/server/server_logs/server_pids.txt; \
 	fi
 	@if [ -f src/proxy/proxy_logs/proxy_pids.txt ]; then \
-        echo "Killing Proxies..."; \
-        xargs kill < src/proxy/proxy_logs/proxy_pids.txt 2>/dev/null || true; \
-        rm src/proxy/proxy_logs/proxy_pids.txt; \
+		echo "Killing Proxies..."; \
+		xargs kill < src/proxy/proxy_logs/proxy_pids.txt 2>/dev/null || true; \
+		rm src/proxy/proxy_logs/proxy_pids.txt; \
 	fi
 	@echo "All background processes stopped."
 
@@ -94,15 +86,13 @@ clean-lists:
 	rm -f $(SERVER_LOG_DIR)/known_servers.txt
 	rm -f $(PROXY_LOG_DIR)/known_proxies.txt
 
-clean: clean-logs stop-servers clean-lists clean-db
+clean: clean-logs stop-servers clean-lists clean-dbs
 	@echo "Cleanup complete."
 
 help:
 	@echo "Available commands:"
 	@echo "  make install           - Install python dependencies"
-	@echo "  make db                - Start PostgreSQL in Docker"
-	@echo "  make stop-db           - Stop PostgreSQL"
-	@echo "  make clean-db          - Remove PostgreSQL container"
+	@echo "  make clean-dbs         - Remove all PostgreSQL containers"
 	@echo "  make init              - Initialize the system (db, servers, proxies)"
 	@echo "  make client ID=<User_X>  - Run a client with identifier User_X"
 	@echo "  make servers           - Run initial setup via admin tool"
